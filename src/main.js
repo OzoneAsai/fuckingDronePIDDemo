@@ -1,7 +1,8 @@
 import App from './App.svelte';
 
-const app = new App({
-  target: document.getElementById('app') ?? document.body.appendChild(document.createElement('div')),
-});
+const target =
+  document.getElementById('app') ?? document.body.appendChild(document.createElement('div'));
+
+const app = App.mount(target);
 
 export default app;
