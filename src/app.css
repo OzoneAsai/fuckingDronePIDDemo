@@ -31,6 +31,31 @@ main {
   gap: clamp(1.25rem, 2vw, 2rem);
 }
 
+.fallback-callout {
+  grid-column: 1 / -1;
+  padding: 1rem 1.25rem;
+  border-radius: 1.25rem;
+  background: linear-gradient(120deg, rgba(56, 189, 248, 0.14), rgba(14, 165, 233, 0.05));
+  border: 1px solid rgba(125, 211, 252, 0.25);
+  color: #bae6fd;
+  box-shadow: 0 24px 45px rgba(8, 47, 73, 0.35);
+  line-height: 1.55;
+}
+
+.fallback-callout strong {
+  display: block;
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+
+.fallback-callout a {
+  color: #7dd3fc;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 @media (max-width: 1200px) {
   .layout {
     grid-template-columns: 1fr;

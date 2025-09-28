@@ -397,6 +397,13 @@ command(29.5, 0.0, 0, 0, 0)
 
 <main>
   <div class="layout">
+    <div class="fallback-callout">
+      <strong>描画が表示されない場合</strong>
+      <p>
+        まず <a href="/simplified.html" target="_blank" rel="noreferrer">簡易レンダラー</a> で WebGL が動作するか確認してください。
+        床・壁・ドローンが見えればメインシミュレーションの描画環境も整っています。
+      </p>
+    </div>
     <div class="column column--main">
       <div class="viewport-card">
         <div class="timeline">

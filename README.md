@@ -23,7 +23,13 @@ node server.js
 ```
 
 上記コマンドはいずれも Vite の開発サーバを Node.js 上で起動します。初回起動時に JeNo 3 STL を自動ダウンロードし、`public/models/`
-にキャッシュします。従来通り `npm run dev` での起動も可能です。ブラウザで `http://localhost:5173` を開くと、ドローンモデルと PID コントロール UI が表示されます。
+にキャッシュします。従来通り `npm run dev` での起動も可能です。
+
+### 簡易描画チェック
+
+ブラウザで `http://localhost:5173/simplified.html` を開くと、床・壁・天井と簡易ドローンが回転する軽量レンダラーが表示されます。ここで影まで描画できることを確認してから、`http://localhost:5173` のフル UI を開くとデバッグが容易です。
+
+ブラウザで `http://localhost:5173` を開くと、ドローンモデルと PID コントロール UI が表示されます。
 環境変数 `FORCE_REFRESH_JENO_FRAME=true` を付与するとキャッシュ済みの STL を再ダウンロードできます。
 
 ### ビルド
