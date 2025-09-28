@@ -69,6 +69,8 @@ command(29.5, 0.0, 0, 0, 0)
   let autopilotError = '';
   let autopilotStatus = '未実行';
   let lastAutomationCommand = null;
+  let defaultAutomationArmed = true;
+  let defaultAutomationLaunched = false;
 
   onMount(() => {
     console.log('[App] onMount - initializing worker');
@@ -353,6 +355,7 @@ command(29.5, 0.0, 0, 0, 0)
     autopilotError = '';
     autopilotStatus = '自動制御をリセットしました。';
     lastAutomationCommand = null;
+    defaultAutomationArmed = false;
     console.log('[App] Automation cleared');
   }
 
@@ -403,6 +406,12 @@ command(29.5, 0.0, 0, 0, 0)
       autopilotStatus = `t=${command.time.toFixed(2)} s でコマンド適用`;
       console.log('[App] applyAutomationCommand', command);
     }
+  }
+
+  $: if (ready && defaultAutomationArmed && !defaultAutomationLaunched) {
+    defaultAutomationLaunched = true;
+    console.log('[App] Auto-running default Skulpt program');
+    runAutomation();
   }
 
   $: actualEuler = latest?.state?.eulerDeg ?? { roll: 0, pitch: 0, yaw: 0 };
