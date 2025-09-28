@@ -1,0 +1,179 @@
+{
+  "meta": {
+    "platform": "JeNo 3 (open-source frame)",
+    "license_frame": "CC-BY-4.0",
+    "sources_tag": ["WAF/JeNo-3-3.5", "Gemfan 3018", "RCinPower 1204 5000KV", "GNB 3S 450mAh"],
+    "schema_version": "1.0-fpv-micro",
+    "last_updated": "2025-09-28",
+    "units": {
+      "length": "m",
+      "mass": "kg",
+      "angle": "deg",
+      "speed": "m/s",
+      "accel": "m/s^2",
+      "force": "N",
+      "moment": "N·m",
+      "energy": "Wh",
+      "power": "W",
+      "density": "kg/m^3",
+      "rpm": "rev/min"
+    }
+  },
+  "selection": {
+    "frame": {
+      "name": "JeNo 3",
+      "repo": "https://github.com/WE-are-FPV/JeNo-3-3.5",
+      "geometry": "Wide/Squished-X",
+      "prop_size_supported": "3.0 in",
+      "frame_mass_kg_est": 0.050,
+      "notes": "GitHub公称40–55 g（ビス込み）の中庸値を採用"
+    },
+    "reference_build": "3S・低負荷3インチ（3018）・1204/5000KV・AIO 20A・アナログ軽量カメラ"
+  },
+  "airframe": {
+    "rotor_count": 4,
+    "wheelbase_m_est": 0.135,
+    "dimensions_m_est": { "L": 0.10, "W": 0.10, "H": 0.045 },
+    "prop_guard": false
+  },
+  "components": {
+    "motors": {
+      "model": "RCinPower GTS V2 1204 5000KV",
+      "count": 4,
+      "kv_rpm_per_V": 5000,
+      "stator": "12x4 mm",
+      "mass_kg_each": 0.006,
+      "internal_resistance_ohm_line_to_line": 0.125,
+      "idle_current_A_at_10V": 0.95,
+      "max_cont_current_A": 6.0,
+      "max_cont_power_W_3S": 89.0
+    },
+    "propellers": {
+      "model": "Gemfan 3018-2 (two-blade)",
+      "diameter_m": 0.0762,
+      "pitch_m": 0.04572,
+      "blade_count": 2,
+      "hub_bore_m": 0.002,
+      "material": "PC",
+      "mass_kg_each": 0.00075
+    },
+    "esc_fc": {
+      "model": "BETAFPV Toothpick F4 AIO 20A",
+      "type": "AIO FC + 4in1 ESC (BLHeli_S)",
+      "cells_supported": "2–4S",
+      "cont_current_A": 20,
+      "mass_kg": 0.0066,
+      "mount": "25.5x25.5 M2"
+    },
+    "battery": {
+      "model": "GNB 3S 450mAh 80C",
+      "cells": 3,
+      "nominal_voltage_V": 11.1,
+      "capacity_Ah": 0.45,
+      "energy_Wh": 4.995,
+      "mass_kg": 0.040
+    },
+    "camera_vtx": {
+      "type": "Analog nano + 200mW VTX (代表例)",
+      "mass_kg_est": 0.008
+    }
+  },
+  "mass_breakdown": {
+    "frame_kg": 0.050,
+    "motors_kg": 0.024,
+    "props_kg": 0.003,
+    "esc_fc_kg": 0.0066,
+    "battery_kg": 0.040,
+    "camera_vtx_kg": 0.008,
+    "payload_other_kg": 0.000,
+    "auw_kg": 0.1316
+  },
+  "environment_model": {
+    "gravity_mps2": 9.80665,
+    "air_density_model": "US_Standard_Atmosphere_1976",
+    "rho0_kg_per_m3": 1.225
+  },
+  "propulsion_model": {
+    "definitions": {
+      "T": "C_T * rho * n^2 * D^4",
+      "Q": "C_Q * rho * n^2 * D^5",
+      "J": "V / (n * D)"
+    },
+    "aero_coeffs_assumed": {
+      "type": "Gemfan 3018 2-blade の一般傾向をベースにした近似",
+      "C_T0": 0.10,
+      "C_Q0": 0.010
+    },
+    "ct_cq_table": {
+      "J":  [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+      "C_T":[0.10, 0.097, 0.093, 0.086, 0.077, 0.065, 0.050, 0.032, 0.012, 0.0, 0.0],
+      "C_Q":[0.010, 0.0096, 0.0092, 0.0087, 0.0081, 0.0074, 0.0066, 0.0057, 0.0047, 0.0036, 0.0]
+    },
+    "duct_factor": 1.00
+  },
+  "aerodynamics": {
+    "rotor_disk_area_m2_total": 0.0182414692475,
+    "notes": "4×πR^2, R=0.0381 m"
+  },
+  "performance_targets": {
+    "hover": {
+      "rho_kg_per_m3": 1.225,
+      "weight_N": 1.29055514,
+      "thrust_per_rotor_N": 0.322638785,
+      "assumed_CT_for_hover": 0.10,
+      "hover_n_rev_per_s": 279.499,
+      "hover_rpm": 16769.94,
+      "mech_power_W_induced": 6.94,
+      "mech_power_W_profile_est": 11.2,
+      "mech_power_W_total_est": 18.1,
+      "electrical_efficiency_est": 0.80,
+      "electrical_power_W_total_est": 22.6
+    },
+    "climb": {
+      "target_ascend_mps": 6.0,
+      "comment": "3\"低負荷プロペラ＋1204/5000KVの一般域"
+    },
+    "level_flight": {
+      "target_max_speed_mps_est": 25.0,
+      "CdA_m2_est": 0.010
+    },
+    "endurance_estimate": {
+      "battery_Wh": 4.995,
+      "cruise_power_W": 18.0,
+      "hover_power_W": 22.6,
+      "hover_time_min_est": 13.2,
+      "cruise_time_min_est": 16.6
+    }
+  },
+  "inertia_estimates": {
+    "about_COM_axes": "x: roll, y: pitch, z: yaw",
+    "Ixx_kgm2_est": 1.1524e-4,
+    "Iyy_kgm2_est": 1.1871e-4,
+    "Izz_kgm2_est": 2.2788e-4,
+    "method": "フレーム板近似 + 中央バッテリー箱 + モーター点質量 (r≈wheelbase/2/√2) + カメラ前方オフセット0.03 m"
+  },
+  "control_limits": {
+    "max_tilt_deg_est": 60,
+    "rate_controller_bandwidth_hz_est": 180,
+    "motor_response_bandwidth_hz_est": 180
+  },
+  "telemetry_tuning": {
+    "bpf_method": {
+      "blade_count": 2,
+      "rpm_formula": "RPM = 60 * BPF / blades",
+      "expected_BPF_hz_at_hover": 559.0
+    },
+    "targets": [
+      "Hover RPM ≈ 16.8k",
+      "Hover power ≈ 22–23 W total",
+      "V–P曲線からCdA微調整、CT/CQは最高速・上昇率で収束"
+    ]
+  },
+  "provenance_notes": {
+    "frame": "JeNo 3/3.5 GitHubに詳細仕様（3\"対応、40–55 g、各板厚、20mmスタック高）",
+    "prop": "Gemfan 3018（3\"×1.8\"、~0.75 g、1.5/2.0mmハブ）",
+    "motor": "RCinPower 1204 5000KV（R=0.125Ω, I0=0.95A@10V, 6A/89W@3S）",
+    "battery": "GNB 3S 450 mAh（重量40–42 g帯）",
+    "ct_cq": "実測データ不足のため2枚低負荷プロペラの代表曲線をスケールした近似（実測で置換推奨）"
+  }
+}
