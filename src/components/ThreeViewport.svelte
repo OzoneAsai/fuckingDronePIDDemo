@@ -18,6 +18,7 @@
   let estimateMesh;
   let frameMesh;
   let gridHelper;
+  let canvasEl;
 
   const size = new THREE.Vector2();
   const framePath = '/models/01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl';
@@ -192,13 +193,11 @@
   }
 
   onMount(() => {
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.domElement.classList.add('viewport-canvas');
-    container.appendChild(renderer.domElement);
 
     createScene();
     handleResize();
@@ -211,7 +210,8 @@
     window.removeEventListener('resize', handleResize);
     if (renderer) {
       renderer.dispose();
-      renderer.domElement?.remove();
+      renderer.forceContextLoss?.();
+      renderer = undefined;
     }
     gridHelper = undefined;
     scene?.traverse((obj) => {
@@ -230,6 +230,7 @@
 </script>
 
 <div class="canvas-wrapper" bind:this={container}>
+  <canvas class="viewport-canvas" bind:this={canvasEl}></canvas>
   <div class="world-overlay">
     <span class="world-label">World time</span>
     <span class="world-value">{worldTime.toFixed(2)} s</span>
