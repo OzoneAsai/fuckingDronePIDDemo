@@ -409,7 +409,12 @@ command(29.5, 0.0, 0, 0, 0)
           </div>
           <div class="timeline__footer">リセットまで残り {timelineRemaining.toFixed(2)} s</div>
         </div>
-        <ThreeViewport actualQuat={quadQuat} estimatedQuat={estimation?.quaternion ?? quadQuat} position={latest?.state?.position ?? [0, 0, 0]} />
+        <ThreeViewport
+          actualQuat={quadQuat}
+          estimatedQuat={estimation?.quaternion ?? quadQuat}
+          position={latest?.state?.position ?? [0, 0, 0]}
+          worldTime={timeline?.time ?? 0}
+        />
       </div>
 
       <div class="metrics-grid">
