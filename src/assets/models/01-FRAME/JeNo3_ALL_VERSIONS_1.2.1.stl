@@ -1,0 +1,170 @@
+solid jeno3
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 -0.025000
+      vertex 0.090000 -0.005000 -0.025000
+      vertex 0.090000 0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 -0.025000
+      vertex 0.090000 0.005000 -0.025000
+      vertex -0.090000 0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 0.025000
+      vertex -0.090000 0.005000 0.025000
+      vertex 0.090000 0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 0.025000
+      vertex 0.090000 0.005000 0.025000
+      vertex 0.090000 -0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 -0.025000
+      vertex -0.090000 -0.005000 0.025000
+      vertex 0.090000 -0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 -0.005000 -0.025000
+      vertex 0.090000 -0.005000 0.025000
+      vertex 0.090000 -0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.090000 -0.005000 -0.025000
+      vertex 0.090000 -0.005000 0.025000
+      vertex 0.090000 0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.090000 -0.005000 -0.025000
+      vertex 0.090000 0.005000 0.025000
+      vertex 0.090000 0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.090000 0.005000 -0.025000
+      vertex 0.090000 0.005000 0.025000
+      vertex -0.090000 0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.090000 0.005000 -0.025000
+      vertex -0.090000 0.005000 0.025000
+      vertex -0.090000 0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 0.005000 -0.025000
+      vertex -0.090000 0.005000 0.025000
+      vertex -0.090000 -0.005000 0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.090000 0.005000 -0.025000
+      vertex -0.090000 -0.005000 0.025000
+      vertex -0.090000 -0.005000 -0.025000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 -0.090000
+      vertex 0.025000 -0.005000 -0.090000
+      vertex 0.025000 0.005000 -0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 -0.090000
+      vertex 0.025000 0.005000 -0.090000
+      vertex -0.025000 0.005000 -0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 0.090000
+      vertex -0.025000 0.005000 0.090000
+      vertex 0.025000 0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 0.090000
+      vertex 0.025000 0.005000 0.090000
+      vertex 0.025000 -0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 -0.090000
+      vertex -0.025000 -0.005000 0.090000
+      vertex 0.025000 -0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 -0.005000 -0.090000
+      vertex 0.025000 -0.005000 0.090000
+      vertex 0.025000 -0.005000 -0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.025000 -0.005000 -0.090000
+      vertex 0.025000 -0.005000 0.090000
+      vertex 0.025000 0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.025000 -0.005000 -0.090000
+      vertex 0.025000 0.005000 0.090000
+      vertex 0.025000 0.005000 -0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.025000 0.005000 -0.090000
+      vertex 0.025000 0.005000 0.090000
+      vertex -0.025000 0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0.025000 0.005000 -0.090000
+      vertex -0.025000 0.005000 0.090000
+      vertex -0.025000 0.005000 -0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 0.005000 -0.090000
+      vertex -0.025000 0.005000 0.090000
+      vertex -0.025000 -0.005000 0.090000
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex -0.025000 0.005000 -0.090000
+      vertex -0.025000 -0.005000 0.090000
+      vertex -0.025000 -0.005000 -0.090000
+    endloop
+  endfacet
+endsolid jeno3
