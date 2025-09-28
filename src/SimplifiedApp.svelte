@@ -28,6 +28,7 @@
   let beforeRenderObserver;
   let handleResize = () => {};
   let animationTime = 0;
+  let renderFrameCount = 0;
 
   function createRoom(newScene) {
     const room = MeshBuilder.CreateBox(
@@ -113,6 +114,7 @@
   }
 
   function createScene() {
+    console.log('[Simplified] Creating scene');
     const newScene = new Scene(engine);
     animationTime = 0;
     newScene.useRightHandedSystem = true;
@@ -160,11 +162,16 @@
   }
 
   onMount(() => {
+    console.log('[Simplified] onMount - initializing engine');
     engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
     scene = createScene();
 
     handleResize = () => {
       if (!engine) return;
+      console.log('[Simplified] handleResize', {
+        width: canvas?.clientWidth,
+        height: canvas?.clientHeight
+      });
       engine.resize();
     };
 
@@ -175,6 +182,10 @@
     }
 
     renderLoop = () => {
+      renderFrameCount += 1;
+      if (renderFrameCount <= 5 || renderFrameCount % 120 === 0) {
+        console.log('[Simplified] renderLoop tick', { frame: renderFrameCount, animationTime });
+      }
       scene.render();
     };
 
@@ -183,6 +194,7 @@
   });
 
   onDestroy(() => {
+    console.log('[Simplified] onDestroy');
     window.removeEventListener('resize', handleResize);
     resizeObserver?.disconnect();
 
@@ -202,6 +214,7 @@
     engine = undefined;
     scene = undefined;
     droneRoot = undefined;
+    renderFrameCount = 0;
   });
 </script>
 

@@ -45,6 +45,7 @@ command(29.5, 0.0, 0, 0, 0)
   let measurement = null;
   let actuators = null;
   let timeline = { time: 0, duration: timelineDuration, sessionId: 0, absolute: 0 };
+  let stateMessageCount = 0;
 
   let setpointDeg = { roll: 0, pitch: 0, yaw: 0 };
   let throttleCmd = 0.0;
@@ -70,10 +71,20 @@ command(29.5, 0.0, 0, 0, 0)
   let lastAutomationCommand = null;
 
   onMount(() => {
+    console.log('[App] onMount - initializing worker');
     worker = new Worker(new URL('./worker/simWorker.js', import.meta.url), { type: 'module' });
+    console.log('[App] Worker constructed', worker);
     worker.onmessage = (event) => {
       const data = event.data;
       if (data.type !== 'state') return;
+      stateMessageCount += 1;
+      if (stateMessageCount <= 5 || stateMessageCount % 60 === 0) {
+        console.log('[App] Received state payload', {
+          count: stateMessageCount,
+          timeline: data.snapshot?.timeline ?? data.timeline,
+          sessionReset: data.sessionReset
+        });
+      }
       latest = data.snapshot;
       estimation = data.estimation;
       measurement = data.measurement;
@@ -86,6 +97,7 @@ command(29.5, 0.0, 0, 0, 0)
       if (latest?.timeline) {
         timeline = latest.timeline;
         if (data.sessionReset) {
+          console.log('[App] Session reset flag received');
           handleSessionReset();
         }
       }
@@ -98,10 +110,14 @@ command(29.5, 0.0, 0, 0, 0)
       };
 
       updateHistories();
+      if (!ready) {
+        console.log('[App] Simulator reports ready state');
+      }
       ready = true;
       applyAutomation();
     };
 
+    console.log('[App] Sending init message to worker');
     worker.postMessage({
       type: 'init',
       dt: 0.005,
@@ -111,12 +127,16 @@ command(29.5, 0.0, 0, 0, 0)
       sessionDuration: timelineDuration
     });
 
+    console.log('[App] Init message dispatched');
+
     return () => {
+      console.log('[App] Destroying worker');
       worker?.terminate();
     };
   });
 
   function handleSessionReset() {
+    console.log('[App] handleSessionReset - clearing histories and overrides');
     altitudeHistory = [];
     attitudeHistory = [];
     if (autopilot.rotorOverrides && Object.keys(autopilot.rotorOverrides).length) {
@@ -171,6 +191,12 @@ command(29.5, 0.0, 0, 0, 0)
 
   function sendSetpoint() {
     if (!worker || !ready) return;
+    console.log('[App] sendSetpoint', {
+      roll: setpointDeg.roll,
+      pitch: setpointDeg.pitch,
+      yaw: setpointDeg.yaw,
+      throttle: throttleCmd
+    });
     worker.postMessage({
       type: 'setpoint',
       roll: setpointDeg.roll,
@@ -182,15 +208,18 @@ command(29.5, 0.0, 0, 0, 0)
 
   function sendRotorOverrides(overrides = {}, replace = false) {
     if (!worker) return;
+    console.log('[App] sendRotorOverrides', { overrides, replace });
     worker.postMessage({ type: 'rotorOverrides', overrides, replace });
   }
 
   function changePid(axis, key, value) {
     pid[axis] = { ...pid[axis], [key]: value };
     worker?.postMessage({ type: 'pid', axis, gains: pid[axis] });
+    console.log('[App] changePid', { axis, key, value });
     if (axis === 'roll') {
       pid.pitch = { ...pid.pitch, [key]: value };
       worker?.postMessage({ type: 'pid', axis: 'pitch', gains: pid.pitch });
+      console.log('[App] mirrored PID change to pitch', { key, value });
     }
   }
 
@@ -202,6 +231,7 @@ command(29.5, 0.0, 0, 0, 0)
   }
 
   async function runAutomation() {
+    console.log('[App] runAutomation triggered');
     autopilotConsole = '';
     autopilotError = '';
     autopilotStatus = 'Skulptで解析中…';
@@ -277,6 +307,7 @@ command(29.5, 0.0, 0, 0, 0)
 
     try {
       await Sk.misceval.asyncToPromise(() => Sk.importMainWithBody('<stdin>', false, pythonCode, true));
+      console.log('[App] Skulpt execution finished');
       queue.sort((a, b) => a.time - b.time);
       const overrides = {};
       rotorOverrideMap.forEach((value, index) => {
@@ -291,6 +322,11 @@ command(29.5, 0.0, 0, 0, 0)
         active: queue.length > 0,
         rotorOverrides: overrides
       };
+      console.log('[App] Automation schedule prepared', {
+        commands: queue.length,
+        overrides: Object.keys(overrides).length,
+        session: timeline.sessionId
+      });
       const summary = [];
       if (queue.length) summary.push(`コマンド ${queue.length} 件`);
       if (overrideCount) summary.push(`プロペラ更新 ${overrideCount} 件`);
@@ -306,6 +342,7 @@ command(29.5, 0.0, 0, 0, 0)
       autopilot.active = false;
       autopilotStatus = '自動制御プログラムの解析に失敗しました。';
       autopilotError = err.toString();
+      console.error('[App] Automation script failed', err);
     }
   }
 
@@ -316,6 +353,7 @@ command(29.5, 0.0, 0, 0, 0)
     autopilotError = '';
     autopilotStatus = '自動制御をリセットしました。';
     lastAutomationCommand = null;
+    console.log('[App] Automation cleared');
   }
 
   function applyAutomation() {
@@ -363,6 +401,7 @@ command(29.5, 0.0, 0, 0, 0)
     if (changed) {
       sendSetpoint();
       autopilotStatus = `t=${command.time.toFixed(2)} s でコマンド適用`;
+      console.log('[App] applyAutomationCommand', command);
     }
   }
 

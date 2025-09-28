@@ -8,6 +8,7 @@ import { rpmFromThrust, thrustFromRpm, propulsionLimits } from './propulsion.js'
 import { eulerFromQuat, radiansToDegrees, wrapPi } from './math.js';
 
 export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sessionDuration = 30 } = {}) {
+  console.log('[Simulator] createSimulator', { dt, filterAlpha, sessionDuration });
   let state = createQuadState();
   let estimator = new ComplementaryFilter(filterAlpha);
   estimator.reset(state.quaternion);
@@ -52,6 +53,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   };
 
   function resetState() {
+    console.log('[Simulator] resetState invoked');
     state = createQuadState();
     estimator = new ComplementaryFilter(filterAlpha);
     estimator.reset(state.quaternion);
@@ -61,6 +63,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   }
 
   function setRotorOverrides(overrides = {}, { replace = false } = {}) {
+    console.log('[Simulator] setRotorOverrides', { overrides, replace });
     if (replace || manualRotorOverrides.length !== rotorCount) {
       manualRotorOverrides = new Array(rotorCount).fill(null);
     }
@@ -86,6 +89,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   }
 
   function setSetpoint(newSetpoint) {
+    console.log('[Simulator] setSetpoint', newSetpoint);
     if ('roll' in newSetpoint) setpoint.roll = newSetpoint.roll;
     if ('pitch' in newSetpoint) setpoint.pitch = newSetpoint.pitch;
     if ('yaw' in newSetpoint) setpoint.yaw = newSetpoint.yaw;
@@ -93,6 +97,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   }
 
   function updatePid(axis, gains) {
+    console.log('[Simulator] updatePid', { axis, gains });
     if (pid[axis]) pid[axis].setGains(gains);
   }
 
@@ -135,6 +140,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
       timeline.sessionId += 1;
       timeline.time = 0;
       sessionReset = true;
+      console.log('[Simulator] Session duration reached, resetting', { sessionId: timeline.sessionId });
       resetState();
     }
 

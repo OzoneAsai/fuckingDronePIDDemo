@@ -36,6 +36,7 @@
   let resizeObserver;
   let renderLoop;
   let handleResize = () => {};
+  let renderFrameCount = 0;
 
   const framePath = '/models/01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl';
 
@@ -115,12 +116,14 @@
     estimateMaterial.backFaceCulling = false;
     estimateMaterial.specularColor = Color3.Black();
 
+    console.log('[ThreeViewport] Loading frame model', { framePath });
     SceneLoader.ImportMesh(
       '',
       frameDir,
       frameFile,
       newScene,
       (meshes) => {
+        console.log('[ThreeViewport] Frame meshes imported', { meshCount: meshes?.length ?? 0 });
         meshes.forEach((mesh, index) => {
           mesh.parent = droneRoot;
           mesh.scaling = new Vector3(scale, scale, scale);
@@ -148,6 +151,7 @@
   }
 
   function createScene() {
+    console.log('[ThreeViewport] Creating scene');
     const newScene = new Scene(engine);
     newScene.useRightHandedSystem = true;
     newScene.clearColor = new Color4(0.04, 0.07, 0.13, 1);
@@ -213,11 +217,16 @@
   }
 
   onMount(() => {
+    console.log('[ThreeViewport] onMount - setting up engine');
     engine = new Engine(canvasEl, true, { preserveDrawingBuffer: true, stencil: true });
     scene = createScene();
 
     handleResize = () => {
       if (!engine) return;
+      console.log('[ThreeViewport] handleResize invoked', {
+        width: canvasEl?.clientWidth,
+        height: canvasEl?.clientHeight
+      });
       engine.resize();
     };
 
@@ -229,6 +238,15 @@
 
     renderLoop = () => {
       updateTransforms();
+      renderFrameCount += 1;
+      if (renderFrameCount <= 5 || renderFrameCount % 120 === 0) {
+        console.log('[ThreeViewport] renderLoop tick', {
+          frame: renderFrameCount,
+          worldTime,
+          position,
+          quat: actualQuat
+        });
+      }
       scene.render();
     };
 
@@ -237,6 +255,7 @@
   });
 
   onDestroy(() => {
+    console.log('[ThreeViewport] onDestroy');
     window.removeEventListener('resize', handleResize);
     resizeObserver?.disconnect();
 
@@ -252,6 +271,7 @@
     shadowGenerator = undefined;
     droneRoot = undefined;
     estimateRoot = undefined;
+    renderFrameCount = 0;
   });
 
   $: updateTransforms();
