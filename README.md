@@ -32,6 +32,16 @@ node server.js
 ブラウザで `http://localhost:5173` を開くと、ドローンモデルと PID コントロール UI が表示されます。
 環境変数 `FORCE_REFRESH_JENO_FRAME=true` を付与するとキャッシュ済みの STL を再ダウンロードできます。
 
+### サービスワーカー
+
+開発サーバ/ビルド成果物の双方でサービスワーカーを登録し、以下をキャッシュします。
+
+- HTML (`/`, `/index.html`, `/simplified.html`)
+- JeNo 3 STL などのモデル (`/models/` 配下)
+- `tmp.json` や Vite ビルド成果物（`/assets/` 配下）
+
+ブラウザのコンソールにはインストール・更新・フェッチ挙動を詳細にログ出力しています。更新版が検出されると `updatefound` ログが表示され、`controllerchange` で新しいワーカーへ切り替わります。
+
 ### ビルド
 
 ```bash
