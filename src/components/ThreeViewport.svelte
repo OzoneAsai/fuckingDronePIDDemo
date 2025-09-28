@@ -14,6 +14,7 @@
   let scene;
   let camera;
   let frameId;
+  let resizeObserver;
   let droneGroup;
   let estimateMesh;
   let frameMesh;
@@ -167,11 +168,12 @@
   function handleResize() {
     if (!container || !renderer || !camera) return;
     const rect = container.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    size.set(rect.width, rect.height);
-    camera.aspect = rect.width / rect.height;
+    const width = Math.max(rect.width, 1);
+    const height = Math.max(rect.height, 1);
+    size.set(width, height);
+    camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    renderer.setSize(rect.width, rect.height, false);
+    renderer.setSize(width, height, false);
   }
 
   function updateTransforms() {
@@ -202,12 +204,17 @@
     createScene();
     handleResize();
     window.addEventListener('resize', handleResize);
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => handleResize());
+      resizeObserver.observe(container);
+    }
     animate();
   });
 
   onDestroy(() => {
     cancelAnimationFrame(frameId);
     window.removeEventListener('resize', handleResize);
+    resizeObserver?.disconnect();
     if (renderer) {
       renderer.dispose();
       renderer.forceContextLoss?.();
