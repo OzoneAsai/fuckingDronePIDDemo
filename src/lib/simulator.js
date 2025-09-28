@@ -13,6 +13,8 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   estimator.reset(state.quaternion);
   let imu = createImuModel();
 
+  const rotorCount = airframe.propulsion.rotorCount;
+
   const pid = {
     roll: new PIDController({ kp: 4.0, ki: 0.5, kd: 1.5, outputLimit: 0.8 }),
     pitch: new PIDController({ kp: 4.0, ki: 0.5, kd: 1.5, outputLimit: 0.8 }),
@@ -29,7 +31,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   const gravity = airframe.env.gravity;
   const hoverCollective = mass * gravity;
   const maxThrustPerRotor = thrustFromRpm(propulsionLimits.maxRpm);
-  const maxCollective = maxThrustPerRotor * airframe.propulsion.rotorCount;
+  const maxCollective = maxThrustPerRotor * rotorCount;
   const hoverThrottle = hoverCollective / Math.max(maxCollective, 1e-6);
 
   const setpoint = {
@@ -39,7 +41,8 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     throttle: 0
   };
 
-  let rotorRpmCommands = new Array(airframe.propulsion.rotorCount).fill(0);
+  let rotorRpmCommands = new Array(rotorCount).fill(0);
+  let manualRotorOverrides = new Array(rotorCount).fill(null);
 
   const timeline = {
     time: 0,
@@ -53,8 +56,33 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     estimator = new ComplementaryFilter(filterAlpha);
     estimator.reset(state.quaternion);
     imu = createImuModel();
-    rotorRpmCommands = new Array(airframe.propulsion.rotorCount).fill(0);
+    rotorRpmCommands = new Array(rotorCount).fill(0);
     Object.values(pid).forEach((controller) => controller.reset());
+  }
+
+  function setRotorOverrides(overrides = {}, { replace = false } = {}) {
+    if (replace || manualRotorOverrides.length !== rotorCount) {
+      manualRotorOverrides = new Array(rotorCount).fill(null);
+    }
+    if (!overrides) return;
+    const applyValue = (idx, value) => {
+      if (!Number.isInteger(idx) || idx < 0 || idx >= rotorCount) return;
+      if (value === null || value === undefined) {
+        manualRotorOverrides[idx] = null;
+        return;
+      }
+      const rpmValue = Number(value);
+      if (!Number.isFinite(rpmValue)) return;
+      const clamped = Math.max(0, Math.min(rpmValue, propulsionLimits.maxRpm));
+      manualRotorOverrides[idx] = clamped;
+    };
+    if (Array.isArray(overrides)) {
+      overrides.forEach((value, idx) => applyValue(idx, value));
+    } else {
+      Object.entries(overrides).forEach(([key, value]) => {
+        applyValue(Number(key), value);
+      });
+    }
   }
 
   function setSetpoint(newSetpoint) {
@@ -89,7 +117,13 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
 
     for (let i = 0; i < thrusts.length; i += 1) {
       const desiredRpm = rpmFromThrust(Math.min(thrusts[i], maxThrustPerRotor));
-      rotorRpmCommands[i] = Math.min(desiredRpm, propulsionLimits.maxRpm);
+      const command = Math.min(desiredRpm, propulsionLimits.maxRpm);
+      const override = manualRotorOverrides[i];
+      if (override !== null && override !== undefined) {
+        rotorRpmCommands[i] = Math.max(0, Math.min(override, propulsionLimits.maxRpm));
+      } else {
+        rotorRpmCommands[i] = command;
+      }
     }
 
     const result = stepQuad(state, rotorRpmCommands, dt);
@@ -110,6 +144,7 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
       tau,
       thrusts,
       rotorRpmCommands: [...rotorRpmCommands],
+      rotorOverrides: [...manualRotorOverrides],
       errors,
       timeline: { ...timeline },
       sessionReset,
@@ -146,7 +181,8 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
       motors: {
         rpm: [...state.motor.rpm],
         commandRpm: [...rotorRpmCommands],
-        thrust: [...state.motor.thrust]
+        thrust: [...state.motor.thrust],
+        overrides: [...manualRotorOverrides]
       },
       airframe: {
         mass,
@@ -160,5 +196,5 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     };
   }
 
-  return { step, setSetpoint, updatePid, getSnapshot, reset: resetState, dt };
+  return { step, setSetpoint, updatePid, getSnapshot, reset: resetState, setRotorOverrides, dt };
 }

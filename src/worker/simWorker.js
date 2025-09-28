@@ -23,7 +23,8 @@ function startLoop() {
         actuators: {
           thrusts: lastStep?.thrusts,
           rpmCommands: lastStep?.rotorRpmCommands,
-          tau: lastStep?.tau
+          tau: lastStep?.tau,
+          overrides: lastStep?.rotorOverrides
         },
         errors: lastStep?.errors,
         sessionReset: lastStep?.sessionReset,
@@ -79,6 +80,11 @@ self.onmessage = (event) => {
     }
     case 'resume': {
       startLoop();
+      break;
+    }
+    case 'rotorOverrides': {
+      if (!simulator) break;
+      simulator.setRotorOverrides(msg.overrides ?? {}, { replace: !!msg.replace });
       break;
     }
     default:

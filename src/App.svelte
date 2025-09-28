@@ -7,8 +7,8 @@
   import { propulsionLimits } from './lib/propulsion.js';
   import { radiansToDegrees } from './lib/math.js';
 
-  const timelineDuration = 30;
-  const defaultPython = `# command(time_s, throttle, roll_deg, pitch_deg, yaw_deg)
+const timelineDuration = 30;
+const defaultPython = `# command(time_s, throttle, roll_deg, pitch_deg, yaw_deg)
 # time is relative to the 30 s session clock. Use None to keep a value.
 # Example: gentle takeoff, hold, then land.
 command(0.0, 0.0, 0, 0, 0)
@@ -19,6 +19,24 @@ command(22.0, 0.45, 0, 0, 0)
 command(27.0, 0.2, 0, 0, 0)
 command(29.5, 0.0, 0, 0, 0)
 `;
+
+  const rotorLabels = Array.from({ length: airframe.propulsion.rotorCount }, (_, i) => `Prop${i + 1}`);
+  const propAliasMap = new Map();
+  rotorLabels.forEach((label, index) => {
+    const aliases = [label, `prop${index + 1}`, `Prop${index + 1}`, `motor${index + 1}`, `m${index + 1}`, `${index + 1}`];
+    aliases.forEach((alias) => propAliasMap.set(String(alias).toLowerCase(), index));
+  });
+
+  function resolvePropIdentifier(value) {
+    if (value === undefined || value === null) return null;
+    const normalized = String(value).trim().toLowerCase();
+    if (!normalized) return null;
+    return propAliasMap.has(normalized) ? propAliasMap.get(normalized) : null;
+  }
+
+  function formatPropLabel(index) {
+    return rotorLabels[index] ?? `Prop${index + 1}`;
+  }
 
   let worker;
   let ready = false;
@@ -44,7 +62,7 @@ command(29.5, 0.0, 0, 0, 0)
   let rmsError = 0;
 
   let pythonCode = defaultPython;
-  let autopilot = { schedule: [], pointer: 0, lastSessionId: 0, active: false };
+  let autopilot = { schedule: [], pointer: 0, lastSessionId: 0, active: false, rotorOverrides: {} };
   let autopilotLoop = true;
   let autopilotConsole = '';
   let autopilotError = '';
@@ -101,6 +119,9 @@ command(29.5, 0.0, 0, 0, 0)
   function handleSessionReset() {
     altitudeHistory = [];
     attitudeHistory = [];
+    if (autopilot.rotorOverrides && Object.keys(autopilot.rotorOverrides).length) {
+      sendRotorOverrides(autopilot.rotorOverrides, false);
+    }
     if (!autopilot.schedule.length) return;
     if (autopilotLoop) {
       autopilot.pointer = 0;
@@ -159,6 +180,11 @@ command(29.5, 0.0, 0, 0, 0)
     });
   }
 
+  function sendRotorOverrides(overrides = {}, replace = false) {
+    if (!worker) return;
+    worker.postMessage({ type: 'rotorOverrides', overrides, replace });
+  }
+
   function changePid(axis, key, value) {
     pid[axis] = { ...pid[axis], [key]: value };
     worker?.postMessage({ type: 'pid', axis, gains: pid[axis] });
@@ -181,14 +207,21 @@ command(29.5, 0.0, 0, 0, 0)
     autopilotStatus = 'Skulptで解析中…';
 
     const queue = [];
+    const rotorOverrideMap = new Map();
+
     Sk.configure({
-      output: (text) => (autopilotConsole += text),
+      output: (text) => {
+        autopilotConsole = autopilotConsole + text;
+      },
       read: builtinRead,
       __future__: Sk.python3,
       execLimit: 10000
     });
 
     Sk.sysmodules = new Sk.builtin.dict([]);
+    rotorLabels.forEach((label, index) => {
+      Sk.builtins[`Prop${index + 1}`] = new Sk.builtin.str(label);
+    });
     Sk.builtins.command = new Sk.builtin.func(function (time, throttle, roll, pitch, yaw) {
       if (time === undefined) {
         throw new Sk.builtin.ValueError('command() には少なくとも時間が必要です');
@@ -213,22 +246,62 @@ command(29.5, 0.0, 0, 0, 0)
       return Sk.builtin.none.none$;
     });
 
+    Sk.builtins.updateRot = new Sk.builtin.func(function (prop, rpm) {
+      if (prop === undefined || rpm === undefined) {
+        throw new Sk.builtin.ValueError('updateRot(prop, rpm) には2つの引数が必要です');
+      }
+      const identifier = Sk.ffi.remapToJs(prop);
+      const index = resolvePropIdentifier(identifier);
+      if (index === null) {
+        throw new Sk.builtin.ValueError('updateRot(): Prop1〜Prop4 など既知の識別子で指定してください');
+      }
+      const rpmJs = Sk.ffi.remapToJs(rpm);
+      if (rpmJs === null) {
+        rotorOverrideMap.set(index, null);
+        autopilotConsole = `${autopilotConsole}updateRot(${formatPropLabel(index)}, None) → オーバーライド解除\n`;
+        return Sk.builtin.none.none$;
+      }
+      const rpmNumber = Number(rpmJs);
+      if (!Number.isFinite(rpmNumber)) {
+        throw new Sk.builtin.ValueError('updateRot(): RPM には数値を指定してください');
+      }
+      const clamped = Math.max(0, Math.min(rpmNumber, propulsionLimits.maxRpm));
+      let line = `updateRot(${formatPropLabel(index)}, ${clamped.toFixed(0)} rpm)`;
+      if (clamped !== rpmNumber) {
+        line += `  # 入力 ${rpmNumber.toFixed(0)} をクランプ`;
+      }
+      rotorOverrideMap.set(index, clamped);
+      autopilotConsole = `${autopilotConsole}${line}\n`;
+      return Sk.builtin.none.none$;
+    });
+
     try {
       await Sk.misceval.asyncToPromise(() => Sk.importMainWithBody('<stdin>', false, pythonCode, true));
       queue.sort((a, b) => a.time - b.time);
+      const overrides = {};
+      rotorOverrideMap.forEach((value, index) => {
+        overrides[index] = value;
+      });
+      const overrideCount = Object.keys(overrides).length;
+
       autopilot = {
         schedule: queue,
         pointer: 0,
         lastSessionId: timeline.sessionId,
-        active: queue.length > 0
+        active: queue.length > 0,
+        rotorOverrides: overrides
       };
-      autopilotStatus = queue.length
-        ? `コマンドを ${queue.length} 件読み込みました。`
+      const summary = [];
+      if (queue.length) summary.push(`コマンド ${queue.length} 件`);
+      if (overrideCount) summary.push(`プロペラ更新 ${overrideCount} 件`);
+      autopilotStatus = summary.length
+        ? `${summary.join(' / ')}を読み込みました。`
         : 'コマンドが登録されませんでした。';
       lastAutomationCommand = null;
-      if (!autopilot.active) {
-        autopilotConsole += '\n⚠️ command() 呼び出しが見つかりません。';
+      if (!queue.length && !overrideCount) {
+        autopilotConsole = `${autopilotConsole}\n⚠️ command() 呼び出しが見つかりません。`;
       }
+      sendRotorOverrides(overrides, true);
     } catch (err) {
       autopilot.active = false;
       autopilotStatus = '自動制御プログラムの解析に失敗しました。';
@@ -237,7 +310,8 @@ command(29.5, 0.0, 0, 0, 0)
   }
 
   function clearAutomation() {
-    autopilot = { schedule: [], pointer: 0, lastSessionId: timeline.sessionId, active: false };
+    autopilot = { schedule: [], pointer: 0, lastSessionId: timeline.sessionId, active: false, rotorOverrides: {} };
+    sendRotorOverrides({}, true);
     autopilotConsole = '';
     autopilotError = '';
     autopilotStatus = '自動制御をリセットしました。';
@@ -310,6 +384,15 @@ command(29.5, 0.0, 0, 0, 0)
   $: hoverPercent = (hoverThrottleEstimate * 100).toFixed(1);
   $: throttlePercent = (throttleCmd * 100).toFixed(1);
   $: attitudeScore = computeAttitudeScore(errorDeg);
+  $: rotorOverrideList = Object.entries(autopilot.rotorOverrides ?? {})
+    .map(([index, rpm]) => {
+      const idx = Number(index);
+      if (!Number.isFinite(idx) || idx < 0) return null;
+      const value = rpm === null || rpm === undefined ? null : Number(rpm);
+      return { index: idx, rpm: Number.isFinite(value) ? value : null };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index);
 </script>
 
 <main>
@@ -383,6 +466,13 @@ command(29.5, 0.0, 0, 0, 0)
           <span>セッション毎に自動再実行</span>
         </label>
         <div class="autopilot-status">{autopilotStatus}</div>
+        {#if rotorOverrideList.length}
+          <div class="prop-map">
+            {#each rotorOverrideList as override}
+              <span>{formatPropLabel(override.index)} → {override.rpm === null ? '解除' : `${override.rpm.toFixed(0)} rpm`}</span>
+            {/each}
+          </div>
+        {/if}
         {#if lastAutomationCommand}
           <div class="autopilot-status">最新コマンド: t={lastAutomationCommand.time.toFixed(2)}s, thr={lastAutomationCommand.throttle ?? '—'}</div>
         {/if}

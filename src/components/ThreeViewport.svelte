@@ -16,6 +16,7 @@
   let droneGroup;
   let estimateMesh;
   let frameMesh;
+  let gridHelper;
 
   const size = new THREE.Vector2();
   const framePath = '/models/01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl';
@@ -27,6 +28,8 @@
 
     const ambient = new THREE.AmbientLight(0xbfd7ff, 0.55);
     scene.add(ambient);
+    const hemi = new THREE.HemisphereLight(0x9ad5ff, 0x0b1220, 0.32);
+    scene.add(hemi);
     const dir = new THREE.DirectionalLight(0xffffff, 0.85);
     dir.position.set(4, 6, 4);
     dir.castShadow = true;
@@ -41,6 +44,12 @@
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
+
+    gridHelper = new THREE.GridHelper(16, 32, 0x38bdf8, 0x1f2937);
+    gridHelper.material.opacity = 0.18;
+    gridHelper.material.transparent = true;
+    gridHelper.position.y = 0.001;
+    scene.add(gridHelper);
 
     const padMat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x172554, emissiveIntensity: 0.2, roughness: 0.4 });
     const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.01, 48), padMat);
@@ -86,6 +95,7 @@
   function handleResize() {
     if (!container || !renderer || !camera) return;
     const rect = container.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
     size.set(rect.width, rect.height);
     camera.aspect = rect.width / rect.height;
     camera.updateProjectionMatrix();
@@ -116,6 +126,7 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.domElement.classList.add('viewport-canvas');
     container.appendChild(renderer.domElement);
 
     createScene();
@@ -131,6 +142,7 @@
       renderer.dispose();
       renderer.domElement?.remove();
     }
+    gridHelper = undefined;
     scene?.traverse((obj) => {
       if (obj.geometry) obj.geometry.dispose?.();
       if (obj.material) {
@@ -150,12 +162,35 @@
 
 <style>
   .canvas-wrapper {
+    position: relative;
     width: 100%;
     height: 100%;
     min-height: 420px;
     border-radius: 1.25rem;
     overflow: hidden;
     box-shadow: 0 40px 80px rgba(15, 23, 42, 0.35);
-    background: radial-gradient(circle at 50% 20%, rgba(14, 165, 233, 0.12), rgba(15, 23, 42, 0.95));
+    background: radial-gradient(circle at 40% 12%, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.96));
+  }
+
+  .canvas-wrapper::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 35%, rgba(14, 165, 233, 0.12), transparent 60%),
+      linear-gradient(135deg, rgba(148, 163, 184, 0.15) 0%, rgba(14, 116, 144, 0.02) 60%, transparent 100%);
+    mix-blend-mode: screen;
+  }
+
+  :global(.viewport-canvas) {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  @media (max-width: 720px) {
+    .canvas-wrapper {
+      min-height: 320px;
+    }
   }
 </style>
