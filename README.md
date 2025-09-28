@@ -1,10 +1,10 @@
 # IMUベース ドローンPID制御デモ
 
-このリポジトリは、JeNo 3 フレーム＋Gemfan 3018 プロペラ構成（`tmp.json` に収録）をもとにしたクアッドロータの IMU/PID 制御デモを Svelte + Three.js で可視化するサンプルです。制御・物理・IMU 推定は Web Worker 上で 200 Hz で動作し、メインスレッドでは 3D 表示・Skulpt 自動化エディタ・実行ログを提供します。3D モデルは起動時にダウンロードされ `public/models/01-FRAME/` にキャッシュされる `01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl` を読み込んで描画しています。
+- このリポジトリは、JeNo 3 フレーム＋Gemfan 3018 プロペラ構成（`tmp.json` に収録）をもとにしたクアッドロータの IMU/PID 制御デモを Svelte + Babylon.js で可視化するサンプルです。制御・物理・IMU 推定は Web Worker 上で 200 Hz で動作し、メインスレッドでは 3D 表示・Skulpt 自動化エディタ・実行ログを提供します。3D モデルは起動時にダウンロードされ `public/models/01-FRAME/` にキャッシュされる `01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl` を読み込んで描画しています。
 
 ## 主要構成
 
-- **UI / 可視化**: Svelte + Three.js
+- **UI / 可視化**: Svelte + Babylon.js
 - **シミュレーション**: Web Worker 内で剛体力学、プロペラ推力モデル、補償フィルタ、PID 制御を実装
 - **機体データ**: `tmp.json` から質量・慣性・プロペラ係数などを読み込み
 
@@ -55,7 +55,7 @@ npm run build
 ## データフロー概要
 
 ```
-Svelte UI ─┬─ Three.js 可視化（STL モデル）
+Svelte UI ─┬─ Babylon.js 可視化（STL モデル）
            ├─ Skulpt (Python → コマンドキュー)
            └─ Web Worker (200 Hz)
                 │

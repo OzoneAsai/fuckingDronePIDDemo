@@ -1,326 +1,229 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import * as THREE from 'three';
+  import {
+    ArcRotateCamera,
+    Color3,
+    Color4,
+    DirectionalLight,
+    Engine,
+    HemisphericLight,
+    Mesh,
+    MeshBuilder,
+    Scene,
+    ShadowGenerator,
+    StandardMaterial,
+    TransformNode,
+    Vector3
+  } from '@babylonjs/core';
 
   let container;
-  let renderer;
+  let canvas;
+  let engine;
   let scene;
   let camera;
-  let frameId;
-  let drone;
+  let droneRoot;
+  let rotorNodes = [];
+  let resizeObserver;
+  let renderLoop;
+  let beforeRenderObserver;
+  let handleResize = () => {};
+  let animationTime = 0;
 
-  function buildRoom(scene) {
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e1f29, roughness: 0.8 });
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    scene.add(floor);
+  function createRoom(newScene) {
+    const room = MeshBuilder.CreateBox(
+      'simplified-room',
+      { width: 12, height: 5, depth: 12, sideOrientation: Mesh.BACKSIDE },
+      newScene
+    );
+    const roomMat = new StandardMaterial('simplified-room-mat', newScene);
+    roomMat.diffuseColor = Color3.FromHexString('#111827');
+    roomMat.emissiveColor = Color3.FromHexString('#0b1220').scale(0.25);
+    roomMat.specularColor = Color3.Black();
+    room.material = roomMat;
+    room.position.y = 2.4;
 
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x12131c, roughness: 0.9 });
-    const wallGeo = new THREE.PlaneGeometry(12, 4);
+    const ground = MeshBuilder.CreateGround('simplified-ground', { width: 10.5, height: 10.5 }, newScene);
+    const groundMat = new StandardMaterial('simplified-ground-mat', newScene);
+    groundMat.diffuseColor = Color3.FromHexString('#1f2937');
+    groundMat.specularColor = new Color3(0.03, 0.04, 0.05);
+    ground.material = groundMat;
+    ground.receiveShadows = true;
 
-    const wallBack = new THREE.Mesh(wallGeo, wallMat);
-    wallBack.position.set(0, 2, -6);
-    wallBack.receiveShadow = true;
-    scene.add(wallBack);
-
-    const wallLeft = new THREE.Mesh(wallGeo, wallMat);
-    wallLeft.rotation.y = Math.PI / 2;
-    wallLeft.position.set(-6, 2, 0);
-    wallLeft.receiveShadow = true;
-    scene.add(wallLeft);
-
-    const wallRight = new THREE.Mesh(wallGeo, wallMat);
-    wallRight.rotation.y = -Math.PI / 2;
-    wallRight.position.set(6, 2, 0);
-    wallRight.receiveShadow = true;
-    scene.add(wallRight);
-
-    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), wallMat);
-    ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.y = 4;
-    ceiling.receiveShadow = true;
-    scene.add(ceiling);
-
-    const grid = new THREE.GridHelper(12, 24, 0x303848, 0x202432);
-    grid.position.y = 0.001;
-    scene.add(grid);
+    const lines = [];
+    const half = 5;
+    const step = 1;
+    for (let i = -half; i <= half; i += step) {
+      lines.push([new Vector3(i, 0.001, -half), new Vector3(i, 0.001, half)]);
+      lines.push([new Vector3(-half, 0.001, i), new Vector3(half, 0.001, i)]);
+    }
+    const grid = MeshBuilder.CreateLineSystem('simplified-grid', { lines }, newScene);
+    grid.color = new Color3(0.25, 0.45, 0.75);
+    grid.alpha = 0.2;
+    grid.isPickable = false;
+    grid.alwaysSelectAsActiveMesh = true;
   }
 
-  function buildDrone() {
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x3fb4ff,
-      metalness: 0.2,
-      roughness: 0.5
-    });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.05, 0.35), material);
-    body.castShadow = true;
+  function buildDrone(newScene, shadowGen) {
+    rotorNodes = [];
+    droneRoot = new TransformNode('simplified-drone-root', newScene);
+    droneRoot.position = new Vector3(0, 0.12, 0);
+
+    const body = MeshBuilder.CreateBox('simplified-body', { width: 0.35, height: 0.05, depth: 0.35 }, newScene);
+    const bodyMat = new StandardMaterial('simplified-body-mat', newScene);
+    bodyMat.diffuseColor = Color3.FromHexString('#38bdf8');
+    bodyMat.specularColor = new Color3(0.2, 0.3, 0.4);
+    body.material = bodyMat;
     body.position.y = 0.12;
-
-    const armMaterial = new THREE.MeshStandardMaterial({ color: 0x161d2a, roughness: 0.7 });
-    const rotorMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
-
-    const group = new THREE.Group();
-    group.add(body);
+    body.parent = droneRoot;
+    body.receiveShadows = true;
+    shadowGen.addShadowCaster(body);
 
     const armLength = 0.32;
-    const rotorRadius = 0.07;
+    const armMat = new StandardMaterial('simplified-arm-mat', newScene);
+    armMat.diffuseColor = Color3.FromHexString('#0f172a');
+    armMat.specularColor = new Color3(0.05, 0.06, 0.07);
 
-    const armGeometry = new THREE.CylinderGeometry(0.01, 0.01, armLength, 16);
-    const rotorGeometry = new THREE.CylinderGeometry(rotorRadius, rotorRadius, 0.01, 32);
+    const rotorMat = new StandardMaterial('simplified-rotor-mat', newScene);
+    rotorMat.diffuseColor = Color3.FromHexString('#e2e8f0');
+    rotorMat.specularColor = new Color3(0.3, 0.3, 0.3);
 
     const offsets = [
-      new THREE.Vector3(1, 0, 1),
-      new THREE.Vector3(-1, 0, 1),
-      new THREE.Vector3(-1, 0, -1),
-      new THREE.Vector3(1, 0, -1)
+      new Vector3(1, 0, 1),
+      new Vector3(-1, 0, 1),
+      new Vector3(-1, 0, -1),
+      new Vector3(1, 0, -1)
     ];
 
     offsets.forEach((offset, index) => {
-      const arm = new THREE.Mesh(armGeometry, armMaterial);
+      const arm = MeshBuilder.CreateCylinder('simplified-arm', { diameter: 0.02, height: armLength }, newScene);
+      arm.material = armMat;
       arm.rotation.z = Math.PI / 2;
-      arm.castShadow = true;
-      arm.position.set(offset.x * armLength * 0.35, 0.12, offset.z * armLength * 0.35);
-      group.add(arm);
+      arm.position = new Vector3(offset.x * armLength * 0.35, 0.12, offset.z * armLength * 0.35);
+      arm.parent = droneRoot;
+      shadowGen.addShadowCaster(arm);
 
-      const rotor = new THREE.Mesh(rotorGeometry, rotorMaterial);
+      const rotor = MeshBuilder.CreateCylinder('simplified-rotor', { diameter: 0.14, height: 0.01, tessellation: 32 }, newScene);
+      rotor.material = rotorMat;
       rotor.rotation.x = Math.PI / 2;
-      rotor.castShadow = true;
-      rotor.position.set(offset.x * armLength * 0.5, 0.14, offset.z * armLength * 0.5);
-      rotor.name = `rotor-${index}`;
-      group.add(rotor);
+      rotor.position = new Vector3(offset.x * armLength * 0.5, 0.15, offset.z * armLength * 0.5);
+      rotor.parent = droneRoot;
+      rotorNodes.push({ mesh: rotor, direction: index % 2 === 0 ? 1 : -1 });
+      shadowGen.addShadowCaster(rotor);
     });
-
-    group.position.y = 0.12;
-    return group;
   }
 
-  function init() {
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+  function createScene() {
+    const newScene = new Scene(engine);
+    animationTime = 0;
+    newScene.useRightHandedSystem = true;
+    newScene.clearColor = new Color4(0.05, 0.08, 0.15, 1);
 
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d111f);
+    camera = new ArcRotateCamera('simplified-camera', -Math.PI / 4, 1.05, 4.5, new Vector3(0, 0.3, 0), newScene);
+    camera.lowerRadiusLimit = 3.5;
+    camera.upperRadiusLimit = 5.5;
+    camera.minZ = 0.1;
+    camera.maxZ = 30;
+    camera.fov = (48 * Math.PI) / 180;
+    camera.panningSensibility = 0;
+    camera.wheelPrecision = 800;
+    camera.inputs.clear();
 
-    const hemi = new THREE.HemisphereLight(0xf0f8ff, 0x080810, 0.6);
-    scene.add(hemi);
+    const hemi = new HemisphericLight('simplified-hemi', new Vector3(0, 1, 0), newScene);
+    hemi.intensity = 0.6;
+    hemi.groundColor = new Color3(0.08, 0.1, 0.18);
 
-    const spot = new THREE.SpotLight(0xffffff, 0.9, 20, Math.PI / 6, 0.45, 1.2);
-    spot.position.set(3, 5, 2);
-    spot.target.position.set(0, 0, 0);
-    spot.castShadow = true;
-    spot.shadow.mapSize.set(1024, 1024);
-    spot.shadow.bias = -0.0003;
-    scene.add(spot);
-    scene.add(spot.target);
+    const key = new DirectionalLight('simplified-key', new Vector3(-0.55, -1, -0.25), newScene);
+    key.position = new Vector3(3.5, 4.5, -2.5);
+    key.intensity = 1.1;
 
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
-    fill.position.set(-4, 2.5, -1.5);
-    scene.add(fill);
+    const shadowGen = new ShadowGenerator(1024, key);
+    shadowGen.useBlurExponentialShadowMap = true;
+    shadowGen.blurKernel = 16;
 
-    buildRoom(scene);
+    createRoom(newScene);
+    buildDrone(newScene, shadowGen);
 
-    drone = buildDrone();
-    scene.add(drone);
+    beforeRenderObserver = newScene.onBeforeRenderObservable.add(() => {
+      const dt = newScene.getEngine().getDeltaTime() * 0.001;
+      if (!droneRoot) return;
 
-    camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 50);
-    camera.position.set(3.5, 1.8, 3.4);
-    camera.lookAt(0, 0.3, 0);
+      animationTime += dt;
+      droneRoot.rotation.y = animationTime * 0.6;
+      droneRoot.position.y = 0.12 + Math.sin(animationTime * 1.8) * 0.02;
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(width, height);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.domElement.classList.add('simplified-canvas');
-    container.appendChild(renderer.domElement);
+      rotorNodes.forEach(({ mesh, direction }) => {
+        mesh.rotation.y += dt * 40 * direction;
+      });
+    });
 
-    const handleResize = () => {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+    return newScene;
+  }
+
+  onMount(() => {
+    engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    scene = createScene();
+
+    handleResize = () => {
+      if (!engine) return;
+      engine.resize();
     };
 
     window.addEventListener('resize', handleResize);
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => handleResize());
+      resizeObserver.observe(container);
+    }
 
-    const animate = (time) => {
-      const t = time * 0.001;
-      if (drone) {
-        drone.rotation.y = t * 0.6;
-        drone.position.y = 0.12 + Math.sin(t * 1.8) * 0.02;
-        drone.children
-          .filter((child) => child.name?.startsWith('rotor-'))
-          .forEach((rotor, idx) => {
-            const direction = idx % 2 === 0 ? 1 : -1;
-            rotor.rotation.y = (t * 20 * direction) % (Math.PI * 2);
-          });
-      }
-      renderer.render(scene, camera);
-      frameId = requestAnimationFrame(animate);
+    renderLoop = () => {
+      scene.render();
     };
-    frameId = requestAnimationFrame(animate);
 
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      if (frameId) cancelAnimationFrame(frameId);
-      if (renderer) {
-        renderer.dispose();
-        renderer.forceContextLoss?.();
-        renderer.domElement.remove();
-      }
-      scene?.traverse((object) => {
-        if (object.isMesh) {
-          object.geometry?.dispose?.();
-          if (object.material?.dispose) {
-            if (Array.isArray(object.material)) {
-              object.material.forEach((mat) => mat.dispose());
-            } else {
-              object.material.dispose();
-            }
-          }
-        }
-      });
-      scene = null;
-      camera = null;
-      renderer = null;
-      drone = null;
-    };
-  }
-
-  let destroy;
-
-  onMount(() => {
-    destroy = init();
+    engine.runRenderLoop(renderLoop);
+    handleResize();
   });
 
   onDestroy(() => {
-    destroy?.();
+    window.removeEventListener('resize', handleResize);
+    resizeObserver?.disconnect();
+
+    if (engine && renderLoop) {
+      engine.stopRenderLoop(renderLoop);
+    }
+
+    if (scene && beforeRenderObserver) {
+      scene.onBeforeRenderObservable.remove(beforeRenderObserver);
+    }
+
+    scene?.dispose();
+    engine?.dispose();
+
+    rotorNodes = [];
+    animationTime = 0;
+    engine = undefined;
+    scene = undefined;
+    droneRoot = undefined;
   });
 </script>
 
-<div class="layout">
-  <header>
-    <h1>JeNo Simplified Hangar Preview</h1>
-    <p>
-      軽量版のレンダラーです。WebGLが有効な環境で床・壁・天井と簡易ドローンモデルが表示されれば、
-      メインシミュレーションも実行できます。
-    </p>
-  </header>
-  <section class="viewport" bind:this={container} aria-label="Simplified drone hangar viewport"></section>
-  <aside>
-    <h2>チェックリスト</h2>
-    <ul>
-      <li>床と壁が見えていますか？</li>
-      <li>ドローンがゆっくり回転し、影が床に落ちていますか？</li>
-      <li>FPSが極端に落ちる場合は、メイン版のパラメータを調整してください。</li>
-    </ul>
-    <p class="hint">
-      正常に描画できたら <code>/index.html</code> のフル版に戻り、PID デモをお楽しみください。
-    </p>
-  </aside>
+<div class="simplified-wrapper" bind:this={container}>
+  <canvas class="simplified-canvas" bind:this={canvas}></canvas>
 </div>
 
 <style>
-  :global(body) {
-    margin: 0;
-    font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
-    background: #070912;
-    color: #f3f6ff;
-  }
-
-  .layout {
-    min-height: 100vh;
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
-    grid-template-rows: auto 1fr;
-    gap: 1.5rem;
-    padding: 1.5rem 2rem 2rem;
-    box-sizing: border-box;
-  }
-
-  header {
-    grid-column: 1 / -1;
-    max-width: 960px;
-  }
-
-  header h1 {
-    font-size: 1.75rem;
-    margin: 0 0 0.5rem;
-    letter-spacing: 0.02em;
-  }
-
-  header p {
-    margin: 0;
-    color: #c2c8dd;
-    line-height: 1.5;
-  }
-
-  .viewport {
-    position: relative;
-    background: radial-gradient(circle at 20% 20%, #101425, #05060d 70%);
-    border-radius: 1rem;
-    overflow: hidden;
-    min-height: 420px;
-    box-shadow: 0 25px 60px rgba(4, 6, 16, 0.65);
-  }
-
-  .viewport :global(.simplified-canvas) {
+  .simplified-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
-    height: 100%;
-    display: block;
+    height: 100vh;
+    background: radial-gradient(circle at top, #0f172a, #020617 65%);
   }
 
-  aside {
-    background: linear-gradient(160deg, rgba(22, 26, 44, 0.85), rgba(10, 12, 24, 0.95));
-    border-radius: 1rem;
-    padding: 1.5rem;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  }
-
-  aside h2 {
-    margin-top: 0;
-    font-size: 1.25rem;
-  }
-
-  aside ul {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 1rem;
-  }
-
-  aside li::before {
-    content: '✔';
-    color: #5bd4ff;
-    margin-right: 0.5rem;
-  }
-
-  aside li {
-    margin-bottom: 0.5rem;
-    line-height: 1.4;
-  }
-
-  .hint {
-    color: #90a0c0;
-    font-size: 0.95rem;
-  }
-
-  code {
-    font-family: 'Fira Code', 'Source Code Pro', monospace;
-    background: rgba(255, 255, 255, 0.08);
-    padding: 0.15rem 0.3rem;
-    border-radius: 0.35rem;
-  }
-
-  @media (max-width: 900px) {
-    .layout {
-      grid-template-columns: 1fr;
-      grid-template-rows: auto auto auto;
-    }
-
-    aside {
-      order: 3;
-    }
+  .simplified-canvas {
+    width: min(640px, 90vw);
+    height: min(480px, 70vh);
+    border-radius: 1.5rem;
+    box-shadow: 0 35px 80px rgba(8, 12, 24, 0.5);
+    background: rgba(15, 23, 42, 0.9);
   }
 </style>

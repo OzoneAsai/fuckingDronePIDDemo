@@ -1,7 +1,23 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import * as THREE from 'three';
-  import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+  import {
+    ArcRotateCamera,
+    Color3,
+    Color4,
+    DirectionalLight,
+    Engine,
+    HemisphericLight,
+    Mesh,
+    MeshBuilder,
+    Quaternion,
+    Scene,
+    SceneLoader,
+    ShadowGenerator,
+    StandardMaterial,
+    TransformNode,
+    Vector3
+  } from '@babylonjs/core';
+  import '@babylonjs/loaders';
   import { airframe } from '../lib/airframeData.js';
 
   export let actualQuat = [1, 0, 0, 0];
@@ -10,227 +26,232 @@
   export let worldTime = 0;
 
   let container;
-  let renderer;
+  let canvasEl;
+  let engine;
   let scene;
   let camera;
-  let frameId;
+  let droneRoot;
+  let estimateRoot;
+  let shadowGenerator;
   let resizeObserver;
-  let droneGroup;
-  let estimateMesh;
-  let frameMesh;
-  let gridHelper;
-  let canvasEl;
+  let renderLoop;
+  let handleResize = () => {};
 
-  const size = new THREE.Vector2();
   const framePath = '/models/01-FRAME/JeNo3_ALL_VERSIONS_1.2.1.stl';
 
-  function createScene() {
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color('#0a0f1f');
-    scene.fog = new THREE.Fog('#0a0f1f', 8, 18);
+  function createRoom(newScene) {
+    const room = MeshBuilder.CreateBox(
+      'hangar-shell',
+      { width: 18, height: 7, depth: 18, sideOrientation: Mesh.BACKSIDE },
+      newScene
+    );
+    const roomMat = new StandardMaterial('hangar-shell-mat', newScene);
+    roomMat.diffuseColor = Color3.FromHexString('#0b1220');
+    roomMat.emissiveColor = Color3.FromHexString('#0a1120').scale(0.3);
+    roomMat.specularColor = Color3.Black();
+    room.material = roomMat;
+    room.position.y = 3.2;
 
-    const ambient = new THREE.AmbientLight(0xbfd7ff, 0.4);
-    scene.add(ambient);
-    const hemi = new THREE.HemisphereLight(0x9ad5ff, 0x0b1220, 0.25);
-    scene.add(hemi);
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(4, 6, 2);
-    dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
-    dir.shadow.camera.near = 0.5;
-    dir.shadow.camera.far = 20;
-    dir.shadow.camera.left = -6;
-    dir.shadow.camera.right = 6;
-    dir.shadow.camera.top = 6;
-    dir.shadow.camera.bottom = -2;
-    scene.add(dir);
-    dir.target.position.set(0, 0, 0);
-    scene.add(dir.target);
+    const ground = MeshBuilder.CreateGround('hangar-ground', { width: 16, height: 16 }, newScene);
+    const groundMat = new StandardMaterial('hangar-ground-mat', newScene);
+    groundMat.diffuseColor = Color3.FromHexString('#1e293b');
+    groundMat.specularColor = new Color3(0.02, 0.03, 0.04);
+    ground.material = groundMat;
+    ground.receiveShadows = true;
 
-    const spot = new THREE.SpotLight(0x88b4ff, 0.45, 0, Math.PI / 5, 0.4, 1.2);
-    spot.position.set(-3, 5.8, -1.5);
-    spot.target.position.set(0, 0, 0);
-    spot.castShadow = true;
-    spot.shadow.mapSize.set(1024, 1024);
-    spot.shadow.camera.near = 0.5;
-    spot.shadow.camera.far = 18;
-    scene.add(spot);
-    scene.add(spot.target);
+    const pad = MeshBuilder.CreateCylinder('launch-pad', { diameter: 1.2, height: 0.02, tessellation: 48 }, newScene);
+    const padMat = new StandardMaterial('launch-pad-mat', newScene);
+    padMat.diffuseColor = Color3.FromHexString('#0ea5e9');
+    padMat.emissiveColor = Color3.FromHexString('#172554').scale(0.8);
+    padMat.specularColor = Color3.FromHexString('#1e40af').scale(0.25);
+    pad.material = padMat;
+    pad.position.y = 0.01;
+    pad.receiveShadows = true;
 
-    camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
-    camera.position.set(2.4, 1.9, 4.8);
-    camera.lookAt(0, 0.4, 0);
+    const lines = [];
+    const half = 8;
+    const step = 1;
+    for (let i = -half; i <= half; i += step) {
+      lines.push([new Vector3(i, 0.001, -half), new Vector3(i, 0.001, half)]);
+      lines.push([new Vector3(-half, 0.001, i), new Vector3(half, 0.001, i)]);
+    }
+    const grid = MeshBuilder.CreateLineSystem('hangar-grid', { lines }, newScene);
+    grid.color = new Color3(0.2, 0.56, 0.86);
+    grid.alpha = 0.18;
+    grid.isPickable = false;
+    grid.alwaysSelectAsActiveMesh = true;
 
-    const roomMaterial = new THREE.MeshStandardMaterial({
-      color: 0x111b31,
-      roughness: 0.92,
-      metalness: 0.05,
-      side: THREE.BackSide
-    });
-    const roomMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 7, 16), roomMaterial);
-    roomMesh.position.y = 3.2;
-    roomMesh.receiveShadow = true;
-    scene.add(roomMesh);
-
-    const groundMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.95, metalness: 0.05 });
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    scene.add(ground);
-
-    const backWallMat = new THREE.MeshStandardMaterial({ color: 0x131c2f, roughness: 0.88, metalness: 0.1 });
-    const backWall = new THREE.Mesh(new THREE.PlaneGeometry(16, 6.4), backWallMat);
-    backWall.position.set(0, 3.2, -8);
-    scene.add(backWall);
-
-    const sideWallMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9, metalness: 0.08 });
-    const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(16, 6.4), sideWallMat);
-    leftWall.position.set(-8, 3.2, 0);
-    leftWall.rotation.y = Math.PI / 2;
-    scene.add(leftWall);
-
-    const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(16, 6.4), sideWallMat);
-    rightWall.position.set(8, 3.2, 0);
-    rightWall.rotation.y = -Math.PI / 2;
-    scene.add(rightWall);
-
-    const ceilingMat = new THREE.MeshStandardMaterial({ color: 0x0b1220, roughness: 0.85, metalness: 0.12 });
-    const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), ceilingMat);
-    ceiling.position.set(0, 6.4, 0);
-    ceiling.rotation.x = Math.PI / 2;
-    scene.add(ceiling);
-
-    gridHelper = new THREE.GridHelper(16, 32, 0x38bdf8, 0x1f2937);
-    gridHelper.material.opacity = 0.18;
-    gridHelper.material.transparent = true;
-    gridHelper.position.y = 0.001;
-    scene.add(gridHelper);
-
-    const padMat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x172554, emissiveIntensity: 0.2, roughness: 0.4 });
-    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.01, 48), padMat);
-    pad.position.y = 0.005;
-    pad.receiveShadow = true;
-    scene.add(pad);
-
-    const axes = new THREE.AxesHelper(0.4);
-    axes.position.y = 0.01;
-    scene.add(axes);
-
-    droneGroup = new THREE.Group();
-    droneGroup.position.y = 0.02;
-    droneGroup.castShadow = true;
-    scene.add(droneGroup);
-
-    const loader = new STLLoader();
-    loader.load(framePath, (geometry) => {
-      geometry.computeVertexNormals();
-      geometry.center();
-      const scale = airframe.geometry.wheelbase / 0.18; // approx scale relative to generated STL
-      geometry.scale(scale, scale, scale);
-
-      const material = new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        metalness: 0.3,
-        roughness: 0.6,
-        emissive: 0x0f172a,
-        emissiveIntensity: 0.2
-      });
-      frameMesh = new THREE.Mesh(geometry, material);
-      frameMesh.castShadow = true;
-      frameMesh.receiveShadow = true;
-      frameMesh.rotation.x = Math.PI / 2;
-      droneGroup.add(frameMesh);
-
-      const cameraRig = new THREE.Group();
-      cameraRig.position.set(0, -0.005, airframe.geometry.wheelbase * 0.3);
-
-      const camBodyMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, metalness: 0.45, roughness: 0.35 });
-      const camBody = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.05), camBodyMat);
-      camBody.castShadow = true;
-      cameraRig.add(camBody);
-
-      const lensMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0e7490, emissiveIntensity: 0.4, metalness: 0.7, roughness: 0.2 });
-      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.02, 32), lensMat);
-      lens.rotation.x = Math.PI / 2;
-      lens.position.z = 0.04;
-      lens.castShadow = true;
-      cameraRig.add(lens);
-
-      droneGroup.add(cameraRig);
-
-      const estMaterial = new THREE.MeshBasicMaterial({ color: 0xfde68a, wireframe: true, transparent: true, opacity: 0.55 });
-      estimateMesh = new THREE.Mesh(geometry.clone(), estMaterial);
-      estimateMesh.rotation.x = Math.PI / 2;
-      scene.add(estimateMesh);
+    const axisLength = 0.5;
+    const axes = [
+      { name: 'axis-x', points: [Vector3.Zero(), new Vector3(axisLength, 0, 0)], color: new Color3(0.9, 0.3, 0.3) },
+      { name: 'axis-y', points: [Vector3.Zero(), new Vector3(0, axisLength, 0)], color: new Color3(0.4, 0.85, 0.5) },
+      { name: 'axis-z', points: [Vector3.Zero(), new Vector3(0, 0, axisLength)], color: new Color3(0.35, 0.6, 0.95) }
+    ];
+    axes.forEach(({ name, points, color }) => {
+      const axis = MeshBuilder.CreateLines(name, { points }, newScene);
+      axis.color = color;
+      axis.alpha = 0.8;
+      axis.isPickable = false;
+      axis.alwaysSelectAsActiveMesh = true;
+      axis.position.y = 0.02;
     });
   }
 
-  function handleResize() {
-    if (!container || !renderer || !camera) return;
-    const rect = container.getBoundingClientRect();
-    const width = Math.max(rect.width, 1);
-    const height = Math.max(rect.height, 1);
-    size.set(width, height);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height, false);
+  function loadFrame(newScene) {
+    const frameDir = framePath.substring(0, framePath.lastIndexOf('/') + 1);
+    const frameFile = framePath.substring(frameDir.length);
+    const scale = airframe.geometry.wheelbase / 0.18;
+
+    const frameMaterial = new StandardMaterial('jeno-frame-mat', newScene);
+    frameMaterial.diffuseColor = Color3.FromHexString('#38bdf8');
+    frameMaterial.emissiveColor = Color3.FromHexString('#0f172a').scale(0.6);
+    frameMaterial.specularColor = new Color3(0.25, 0.35, 0.45);
+    frameMaterial.backFaceCulling = false;
+
+    const estimateMaterial = new StandardMaterial('jeno-frame-estimate', newScene);
+    estimateMaterial.diffuseColor = Color3.FromHexString('#fde68a');
+    estimateMaterial.alpha = 0.55;
+    estimateMaterial.wireframe = true;
+    estimateMaterial.backFaceCulling = false;
+    estimateMaterial.specularColor = Color3.Black();
+
+    SceneLoader.ImportMesh(
+      '',
+      frameDir,
+      frameFile,
+      newScene,
+      (meshes) => {
+        meshes.forEach((mesh, index) => {
+          mesh.parent = droneRoot;
+          mesh.scaling = new Vector3(scale, scale, scale);
+          mesh.rotationQuaternion = Quaternion.RotationAxis(Vector3.Right(), Math.PI / 2);
+          mesh.material = frameMaterial;
+          mesh.receiveShadows = true;
+          mesh.alwaysSelectAsActiveMesh = true;
+          mesh.isPickable = false;
+          shadowGenerator?.addShadowCaster(mesh);
+
+          const clone = mesh.clone(`${mesh.name || 'frame'}-estimate`);
+          if (clone) {
+            clone.parent = estimateRoot;
+            if (clone.rotationQuaternion) {
+              clone.rotationQuaternion = clone.rotationQuaternion.clone();
+            }
+            clone.material = estimateMaterial;
+            clone.receiveShadows = false;
+            clone.alwaysSelectAsActiveMesh = true;
+            clone.isPickable = false;
+          }
+        });
+      }
+    );
+  }
+
+  function createScene() {
+    const newScene = new Scene(engine);
+    newScene.useRightHandedSystem = true;
+    newScene.clearColor = new Color4(0.04, 0.07, 0.13, 1);
+    newScene.fogMode = Scene.FOGMODE_LINEAR;
+    newScene.fogStart = 9;
+    newScene.fogEnd = 22;
+    newScene.fogColor = new Color3(0.05, 0.09, 0.18);
+
+    camera = new ArcRotateCamera('hangar-camera', -Math.PI / 4, 1.05, 6.2, new Vector3(0, 0.45, 0), newScene);
+    camera.lowerRadiusLimit = 4.2;
+    camera.upperRadiusLimit = 7.8;
+    camera.minZ = 0.1;
+    camera.maxZ = 60;
+    camera.fov = (45 * Math.PI) / 180;
+    camera.wheelPrecision = 1000;
+    camera.panningSensibility = 0;
+    camera.inputs.clear();
+
+    const hemi = new HemisphericLight('hangar-hemi', new Vector3(0, 1, 0), newScene);
+    hemi.intensity = 0.4;
+    hemi.groundColor = new Color3(0.06, 0.08, 0.14);
+
+    const key = new DirectionalLight('hangar-key', new Vector3(-0.45, -1, -0.3), newScene);
+    key.position = new Vector3(4.5, 6.5, -2.4);
+    key.intensity = 1.25;
+
+    shadowGenerator = new ShadowGenerator(2048, key);
+    shadowGenerator.useBlurExponentialShadowMap = true;
+    shadowGenerator.blurKernel = 32;
+
+    createRoom(newScene);
+
+    droneRoot = new TransformNode('drone-root', newScene);
+    droneRoot.rotationQuaternion = Quaternion.Identity();
+    droneRoot.position = new Vector3(0, 0.02, 0);
+
+    estimateRoot = new TransformNode('estimate-root', newScene);
+    estimateRoot.rotationQuaternion = Quaternion.Identity();
+    estimateRoot.position = new Vector3(0, 0.02, 0);
+
+    loadFrame(newScene);
+
+    return newScene;
   }
 
   function updateTransforms() {
-    if (!droneGroup) return;
-    const [qx, qy, qz, qw] = [actualQuat[1], actualQuat[2], actualQuat[3], actualQuat[0]];
-    droneGroup.quaternion.set(qx, qy, qz, qw);
-    droneGroup.position.set(position[0], Math.max(position[2], 0) + 0.02, -position[1]);
+    if (!droneRoot) return;
 
-    if (estimateMesh) {
-      estimateMesh.quaternion.set(estimatedQuat[1], estimatedQuat[2], estimatedQuat[3], estimatedQuat[0]);
-      estimateMesh.position.set(position[0], Math.max(position[2], 0) + 0.02, -position[1]);
+    const ay = Math.max(position[2], 0) + 0.02;
+    droneRoot.position.set(position[0], ay, -position[1]);
+    if (droneRoot.rotationQuaternion) {
+      droneRoot.rotationQuaternion.set(actualQuat[1], actualQuat[2], actualQuat[3], actualQuat[0]);
+      droneRoot.rotationQuaternion.normalize();
+    }
+
+    if (estimateRoot) {
+      estimateRoot.position.set(position[0], ay, -position[1]);
+      if (estimateRoot.rotationQuaternion) {
+        estimateRoot.rotationQuaternion.set(estimatedQuat[1], estimatedQuat[2], estimatedQuat[3], estimatedQuat[0]);
+        estimateRoot.rotationQuaternion.normalize();
+      }
     }
   }
 
-  function animate() {
-    frameId = requestAnimationFrame(animate);
-    updateTransforms();
-    renderer.render(scene, camera);
-  }
-
   onMount(() => {
-    renderer = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true, alpha: true });
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    engine = new Engine(canvasEl, true, { preserveDrawingBuffer: true, stencil: true });
+    scene = createScene();
 
-    createScene();
-    handleResize();
+    handleResize = () => {
+      if (!engine) return;
+      engine.resize();
+    };
+
     window.addEventListener('resize', handleResize);
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(() => handleResize());
       resizeObserver.observe(container);
     }
-    animate();
+
+    renderLoop = () => {
+      updateTransforms();
+      scene.render();
+    };
+
+    engine.runRenderLoop(renderLoop);
+    handleResize();
   });
 
   onDestroy(() => {
-    cancelAnimationFrame(frameId);
     window.removeEventListener('resize', handleResize);
     resizeObserver?.disconnect();
-    if (renderer) {
-      renderer.dispose();
-      renderer.forceContextLoss?.();
-      renderer = undefined;
+
+    if (engine && renderLoop) {
+      engine.stopRenderLoop(renderLoop);
     }
-    gridHelper = undefined;
-    scene?.traverse((obj) => {
-      if (obj.geometry) obj.geometry.dispose?.();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach((mat) => mat.dispose?.());
-        } else {
-          obj.material.dispose?.();
-        }
-      }
-    });
+
+    scene?.dispose();
+    engine?.dispose();
+
+    engine = undefined;
+    scene = undefined;
+    shadowGenerator = undefined;
+    droneRoot = undefined;
+    estimateRoot = undefined;
   });
 
   $: updateTransforms();
