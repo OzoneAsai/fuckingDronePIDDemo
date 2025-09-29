@@ -8,6 +8,7 @@ import { radiansToDegrees, clamp } from './lib/math.js';
 
 const timelineDuration = 30;
 const defaultPython = `# command(time_s, throttle, roll_deg, pitch_deg, yaw_deg)
+# prop_1.power(255)  # 0-255 analog power override for the first quadrant rotor
 # Example: gentle takeoff, hold, then land.
 command(0.0, 0.0, 0, 0, 0)
 command(1.8, 0.55, 0, 0, 0)
@@ -21,9 +22,73 @@ command(29.5, 0.0, 0, 0, 0)
 const rotorLabels = Array.from({ length: airframe.propulsion.rotorCount }, (_, i) => `Prop${i + 1}`);
 const propAliasMap = new Map();
 rotorLabels.forEach((label, index) => {
-  const aliases = [label, `prop${index + 1}`, `motor${index + 1}`, `m${index + 1}`, `${index + 1}`];
+  const aliases = [
+    label,
+    label.toLowerCase(),
+    `prop${index + 1}`,
+    `prop_${index + 1}`,
+    `prop ${index + 1}`,
+    `motor${index + 1}`,
+    `m${index + 1}`,
+    `${index + 1}`
+  ];
   aliases.forEach((alias) => propAliasMap.set(String(alias).toLowerCase(), index));
 });
+
+const ANALOG_MAX_POWER = 255;
+
+function buildPropPrelude() {
+  const lines = [
+    '# === Auto-generated prop helpers (created by the host app) ===',
+    'ANALOG_MAX = 255',
+    'class _PropChannel:',
+    '    def __init__(self, identifier):',
+    '        self._identifier = identifier',
+    '    def power(self, value):',
+    '        __prop_power(self._identifier, value)',
+    '    def __repr__(self):',
+    '        return f"<PropChannel {self._identifier}>"',
+    ''
+  ];
+
+  const tupleNames = [];
+  const propMapEntries = new Map();
+
+  rotorLabels.forEach((label, index) => {
+    const pyName = `prop_${index + 1}`;
+    tupleNames.push(pyName);
+    lines.push(`${pyName} = _PropChannel("${label}")`);
+    lines.push(`prop${index + 1} = ${pyName}`);
+
+    const aliasSet = new Set([
+      label,
+      label.toLowerCase(),
+      `Prop${index + 1}`,
+      `prop${index + 1}`,
+      `prop_${index + 1}`,
+      `prop ${index + 1}`,
+      `motor${index + 1}`,
+      `m${index + 1}`,
+      `${index + 1}`
+    ]);
+
+    aliasSet.forEach((alias) => {
+      propMapEntries.set(String(alias).toLowerCase(), pyName);
+    });
+  });
+
+  lines.push(`props = (${tupleNames.join(', ')})`);
+  lines.push('prop_map = {');
+  propMapEntries.forEach((value, key) => {
+    lines.push(`    "${key}": ${value},`);
+  });
+  lines.push('}');
+  lines.push('');
+  lines.push('# Quadrant reference: prop_1 -> +X,+Y, prop_2 -> -X,+Y, prop_3 -> -X,-Y, prop_4 -> +X,-Y');
+  lines.push('');
+
+  return lines.join('\n');
+}
 
 const app = document.getElementById('app') ?? document.body.appendChild(document.createElement('div'));
 app.innerHTML = `
@@ -363,6 +428,11 @@ function formatPropLabel(index) {
   return rotorLabels[index] ?? `Prop${index + 1}`;
 }
 
+function computeDisplayAltitude(rawAltitude = 0) {
+  const offset = typeof viewport.getFrameGroundOffset === 'function' ? viewport.getFrameGroundOffset() : 0;
+  return Math.max(0, rawAltitude) + offset;
+}
+
 function sendSetpoint() {
   if (!workerReady) return;
   worker.postMessage({
@@ -394,6 +464,37 @@ async function runAutomation({ fromAuto = false } = {}) {
 
   const queue = [];
   const rotorOverrideMap = new Map();
+
+  function applyRotorOverride(index, rpmValue, { source = 'updateRot', annotation } = {}) {
+    const label = formatPropLabel(index);
+    if (rpmValue === null) {
+      let line = `${source}: ${label} オーバーライド解除`;
+      if (annotation) line += ` ${annotation}`;
+      rotorOverrideMap.set(index, null);
+      autopConsole = `${autopConsole}${line}\n`;
+      updateAutomationDisplays();
+      return null;
+    }
+
+    const rpmNumber = Number(rpmValue);
+    if (!Number.isFinite(rpmNumber)) {
+      throw new Sk.builtin.ValueError(`${source}: RPM には有限の数値を指定してください`);
+    }
+
+    const clamped = Math.max(0, Math.min(rpmNumber, propulsionLimits.maxRpm));
+    let line = `${source}: ${label} → ${clamped.toFixed(0)} rpm`;
+    if (annotation) {
+      line += ` ${annotation}`;
+    }
+    if (clamped !== rpmNumber) {
+      line += ` (入力 ${rpmNumber.toFixed(0)} rpm をクランプ)`;
+    }
+
+    rotorOverrideMap.set(index, clamped);
+    autopConsole = `${autopConsole}${line}\n`;
+    updateAutomationDisplays();
+    return clamped;
+  }
 
   Sk.configure({
     output: (text) => {
@@ -444,28 +545,51 @@ async function runAutomation({ fromAuto = false } = {}) {
     }
     const rpmJs = Sk.ffi.remapToJs(rpm);
     if (rpmJs === null) {
-      rotorOverrideMap.set(index, null);
-      autopConsole = `${autopConsole}updateRot(${formatPropLabel(index)}, None) → オーバーライド解除\n`;
-      updateAutomationDisplays();
+      applyRotorOverride(index, null, { source: 'updateRot' });
       return Sk.builtin.none.none$;
     }
     const rpmNumber = Number(rpmJs);
     if (!Number.isFinite(rpmNumber)) {
       throw new Sk.builtin.ValueError('updateRot(): RPM には数値を指定してください');
     }
-    const clamped = Math.max(0, Math.min(rpmNumber, propulsionLimits.maxRpm));
-    let line = `updateRot(${formatPropLabel(index)}, ${clamped.toFixed(0)} rpm)`;
-    if (clamped !== rpmNumber) {
-      line += `  # 入力 ${rpmNumber.toFixed(0)} をクランプ`;
+    applyRotorOverride(index, rpmNumber, { source: 'updateRot' });
+    return Sk.builtin.none.none$;
+  });
+
+  Sk.builtins.__prop_power = new Sk.builtin.func(function (prop, power) {
+    if (prop === undefined) {
+      throw new Sk.builtin.ValueError('prop.power(): プロペラ識別子が必要です');
     }
-    rotorOverrideMap.set(index, clamped);
-    autopConsole = `${autopConsole}${line}\n`;
-    updateAutomationDisplays();
+    const identifier = Sk.ffi.remapToJs(prop);
+    const index = resolvePropIdentifier(identifier);
+    if (index === null) {
+      throw new Sk.builtin.ValueError('prop.power(): prop_1〜prop_4 など既知の識別子で指定してください');
+    }
+    if (power === undefined) {
+      throw new Sk.builtin.ValueError('prop.power(value): value には 0〜255 の数値を指定してください');
+    }
+    const analogJs = Sk.ffi.remapToJs(power);
+    if (analogJs === null) {
+      applyRotorOverride(index, null, { source: 'prop.power' });
+      return Sk.builtin.none.none$;
+    }
+    const analogNumber = Number(analogJs);
+    if (!Number.isFinite(analogNumber)) {
+      throw new Sk.builtin.ValueError('prop.power(): 0〜255 の数値を指定してください');
+    }
+    const clampedAnalog = Math.max(0, Math.min(analogNumber, ANALOG_MAX_POWER));
+    const rpmTarget = (clampedAnalog / ANALOG_MAX_POWER) * propulsionLimits.maxRpm;
+    let annotation = `(analog ${clampedAnalog.toFixed(0)}/${ANALOG_MAX_POWER})`;
+    if (clampedAnalog !== analogNumber) {
+      annotation += ` 入力 ${analogNumber.toFixed(0)} をクランプ`;
+    }
+    applyRotorOverride(index, rpmTarget, { source: 'prop.power', annotation });
     return Sk.builtin.none.none$;
   });
 
   try {
-    await Sk.misceval.asyncToPromise(() => Sk.importMainWithBody('<stdin>', false, dom.pythonEditor.value, true));
+    const scriptBody = `${buildPropPrelude()}\n${dom.pythonEditor.value}`;
+    await Sk.misceval.asyncToPromise(() => Sk.importMainWithBody('<stdin>', false, scriptBody, true));
     queue.sort((a, b) => a.time - b.time);
     const overrides = {};
     rotorOverrideMap.forEach((value, index) => {
@@ -618,9 +742,10 @@ worker.onmessage = (event) => {
     : { roll: 0, pitch: 0, yaw: 0 };
   dom.attitudeEstimate.textContent = `${est.roll.toFixed(1)}° / ${est.pitch.toFixed(1)}° / ${est.yaw.toFixed(1)}°`;
 
-  const altitude = snapshot.state?.position?.[2] ?? 0;
-  dom.altitude.textContent = `${altitude.toFixed(2)} m`;
-  dom.status.textContent = altitude > 0.1 ? 'In flight' : 'Grounded';
+  const altitudeRaw = snapshot.state?.position?.[2] ?? 0;
+  const altitudeDisplay = computeDisplayAltitude(altitudeRaw);
+  dom.altitude.textContent = `${altitudeDisplay.toFixed(2)} m`;
+  dom.status.textContent = altitudeRaw > 0.05 ? 'In flight' : 'Grounded';
 
   const errorsRad = data.errors ?? { roll: 0, pitch: 0, yaw: 0 };
   const errorsDeg = {
@@ -632,7 +757,7 @@ worker.onmessage = (event) => {
   dom.attitudeError.textContent = `${rms.toFixed(2)} °`;
   const attitudeScore = Math.max(0, Math.min(100, 100 - rms * 8));
 
-  altitudeChart.push({ time: timeline.time ?? 0, value: altitude });
+  altitudeChart.push({ time: timeline.time ?? 0, value: altitudeDisplay });
   attitudeChart.push({ time: timeline.time ?? 0, value: attitudeScore });
 
   viewport.update({

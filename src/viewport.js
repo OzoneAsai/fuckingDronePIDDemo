@@ -320,6 +320,9 @@ export function createHangarViewport(canvas) {
         position = [...nextPosition];
       }
     },
+    getFrameGroundOffset() {
+      return frameGroundOffset;
+    },
     dispose() {
       window.removeEventListener('resize', handleResize);
       resizeObserver?.disconnect();
