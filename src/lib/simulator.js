@@ -62,6 +62,15 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     Object.values(pid).forEach((controller) => controller.reset());
   }
 
+  function resetWorld() {
+    console.log('[Simulator] resetWorld invoked');
+    resetState();
+    timeline.sessionId += 1;
+    timeline.time = 0;
+    timeline.absolute = 0;
+    return { timeline: { ...timeline } };
+  }
+
   function setRotorOverrides(overrides = {}, { replace = false } = {}) {
     console.log('[Simulator] setRotorOverrides', { overrides, replace });
     if (replace || manualRotorOverrides.length !== rotorCount) {
@@ -202,5 +211,5 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     };
   }
 
-  return { step, setSetpoint, updatePid, getSnapshot, reset: resetState, setRotorOverrides, dt };
+  return { step, setSetpoint, updatePid, getSnapshot, reset: resetState, resetWorld, setRotorOverrides, dt };
 }

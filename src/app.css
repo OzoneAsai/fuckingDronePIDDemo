@@ -122,6 +122,22 @@ textarea {
   color: var(--text-subtle);
 }
 
+.timeline-actions {
+  margin-top: 0.65rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.timeline-actions .ghost {
+  font-size: 0.75rem;
+  padding: 0.45rem 0.85rem;
+}
+
+.timeline-actions .ghost::after {
+  content: '\21BB';
+  margin-left: 0.5rem;
+}
+
 .timeline-bar {
   margin-top: 0.45rem;
   height: 0.6rem;

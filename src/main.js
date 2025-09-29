@@ -7,16 +7,60 @@ import { propulsionLimits } from './lib/propulsion.js';
 import { radiansToDegrees, clamp } from './lib/math.js';
 
 const timelineDuration = 30;
-const defaultPython = `# command(time_s, throttle, roll_deg, pitch_deg, yaw_deg)
-# prop_1.power(255)  # 0-255 analog power override for the first quadrant rotor
-# Example: gentle takeoff, hold, then land.
-command(0.0, 0.0, 0, 0, 0)
-command(1.8, 0.55, 0, 0, 0)
-command(4.0, 0.52, 0, 0, 0)
-command(15.0, 0.5, 0, 0, 0)
-command(22.0, 0.45, 0, 0, 0)
-command(27.0, 0.25, 0, 0, 0)
-command(29.5, 0.0, 0, 0, 0)
+const defaultPython = `# === Automation bootstrap ===
+# prop_1 は第一象限 (カメラを上にしたときに前右) のロータです。
+# prop_2, prop_3, prop_4 は反時計回りに配置されています。
+#
+# 付属のヘルパー:
+#   - sleep(seconds): タイムラインを seconds 進めます。
+#   - hold(throttle, roll, pitch, yaw): 現在の script_time でコマンドを登録します。
+#   - at(time_s, ...): script_time を time_s に移動してコマンドを登録します。
+#   - get_altitude(): 現在の高度 [m]。
+#   - get_estimated_attitude(): 推定姿勢 (deg/rad) の dict。
+#   - get_actual_attitude(): 実姿勢 (deg/rad) の dict。
+def log(message):
+    print(f"[auto] {message}")
+
+def spin_props(power):
+    prop_1.power(power)
+    prop_2.power(power)
+    prop_3.power(power)
+    prop_4.power(power)
+
+def getError():
+    est = get_estimated_attitude()
+    act = get_actual_attitude()
+    return {
+        "roll_deg": act["roll_deg"] - est["roll_deg"],
+        "pitch_deg": act["pitch_deg"] - est["pitch_deg"],
+        "yaw_deg": act["yaw_deg"] - est["yaw_deg"],
+    }
+
+def stabilize(kp=4.0, ki=0.5, kd=1.5):
+    log("Stabilize around hover throttle")
+    hold(throttle=0.50, roll=0.0, pitch=0.0, yaw=0.0)
+    sleep(2.5)
+    hold(throttle=0.48, roll=0.0, pitch=0.0, yaw=0.0)
+    sleep(2.0)
+
+def liftOff():
+    log("Spooling props for liftoff")
+    spin_props(255)
+    sleep(0.8)
+    hold(throttle=0.55, roll=0.0, pitch=0.0, yaw=0.0)
+    sleep(3.2)
+    if get_altitude() >= 0.6:
+        stabilize()
+    log("Preparing to land")
+    hold(throttle=0.44, roll=0.0, pitch=0.0, yaw=0.0)
+    sleep(2.0)
+    hold(throttle=0.30, roll=0.0, pitch=0.0, yaw=0.0)
+    sleep(1.2)
+    log("Cutting motors")
+    spin_props(0)
+    hold(throttle=0.0, roll=0.0, pitch=0.0, yaw=0.0)
+
+liftOff()
 `;
 
 const rotorLabels = Array.from({ length: airframe.propulsion.rotorCount }, (_, i) => `Prop${i + 1}`);
@@ -84,7 +128,43 @@ function buildPropPrelude() {
   });
   lines.push('}');
   lines.push('');
-  lines.push('# Quadrant reference: prop_1 -> +X,+Y, prop_2 -> -X,+Y, prop_3 -> -X,-Y, prop_4 -> +X,-Y');
+  lines.push('# Quadrant reference:');
+  lines.push('#   prop_1 -> 第一象限 (+X, +Y / 前右)');
+  lines.push('#   prop_2 -> 第二象限 (-X, +Y / 前左)');
+  lines.push('#   prop_3 -> 第三象限 (-X, -Y / 後左)');
+  lines.push('#   prop_4 -> 第四象限 (+X, -Y / 後右)');
+  lines.push('');
+  lines.push('# Timeline helpers');
+  lines.push('script_time = 0.0');
+  lines.push('');
+  lines.push('def reset_clock() -> None:');
+  lines.push('    global script_time');
+  lines.push('    script_time = 0.0');
+  lines.push('');
+  lines.push('def sleep(seconds: float) -> None:');
+  lines.push('    global script_time');
+  lines.push('    if seconds is None:');
+  lines.push('        return');
+  lines.push('    script_time += float(seconds)');
+  lines.push('');
+  lines.push('def hold(throttle=None, roll=None, pitch=None, yaw=None) -> None:');
+  lines.push('    command(script_time, throttle, roll, pitch, yaw)');
+  lines.push('');
+  lines.push('def at(time_s: float, throttle=None, roll=None, pitch=None, yaw=None) -> None:');
+  lines.push('    global script_time');
+  lines.push('    script_time = float(time_s)');
+  lines.push('    command(script_time, throttle, roll, pitch, yaw)');
+  lines.push('');
+  lines.push('def get_altitude() -> float:');
+  lines.push('    return __get_altitude()');
+  lines.push('');
+  lines.push('def get_estimated_attitude() -> dict:');
+  lines.push('    return __get_estimated_attitude()');
+  lines.push('');
+  lines.push('def get_actual_attitude() -> dict:');
+  lines.push('    return __get_actual_attitude()');
+  lines.push('');
+  lines.push('reset_clock()');
   lines.push('');
 
   return lines.join('\n');
@@ -115,6 +195,9 @@ app.innerHTML = `
               <div class="timeline-footer">
                 <span>経過 <span id="timeline-elapsed">0.00 s</span></span>
                 <span>残り <span id="timeline-remaining">30.00 s</span></span>
+              </div>
+              <div class="timeline-actions">
+                <button class="secondary ghost" id="reset-world">Reset World</button>
               </div>
             </div>
             <div class="canvas-wrapper">
@@ -238,7 +321,8 @@ app.innerHTML = `
             <div class="console-output" id="automation-console"></div>
             <div class="automation-status" id="automation-error"></div>
             <div class="footer-note">
-              updateRot(Prop1, 12000) のように個別ロータのRPMを上書きできます。Noneを渡すと解除されます。
+              sleep()/hold()/at() で script_time を進め、prop_1.power(0-255) や updateRot(Prop1, 12000) で各ロータを操作できます。
+              prop_1 は第一象限、None を渡すとオーバーライド解除です。
             </div>
           </article>
         </aside>
@@ -266,7 +350,8 @@ const dom = {
   throttleValue: document.getElementById('throttle-value'),
   runButton: document.getElementById('run-python'),
   clearButton: document.getElementById('clear-python'),
-  loadDefaultButton: document.getElementById('load-default')
+  loadDefaultButton: document.getElementById('load-default'),
+  resetWorldButton: document.getElementById('reset-world')
 };
 
 dom.pythonEditor.value = defaultPython;
@@ -464,6 +549,22 @@ async function runAutomation({ fromAuto = false } = {}) {
 
   const queue = [];
   const rotorOverrideMap = new Map();
+  const snapshotForScript = latestSnapshot;
+  const estimationForScript = latestEstimation;
+
+  const toPyAttitude = (attitude = {}) => {
+    const rollRad = Number(attitude.roll ?? attitude.roll_rad ?? 0);
+    const pitchRad = Number(attitude.pitch ?? attitude.pitch_rad ?? 0);
+    const yawRad = Number(attitude.yaw ?? attitude.yaw_rad ?? 0);
+    const dict = new Sk.builtin.dict([]);
+    dict.mp$ass_subscript(new Sk.builtin.str('roll_rad'), new Sk.builtin.float_(rollRad));
+    dict.mp$ass_subscript(new Sk.builtin.str('pitch_rad'), new Sk.builtin.float_(pitchRad));
+    dict.mp$ass_subscript(new Sk.builtin.str('yaw_rad'), new Sk.builtin.float_(yawRad));
+    dict.mp$ass_subscript(new Sk.builtin.str('roll_deg'), new Sk.builtin.float_(radiansToDegrees(rollRad)));
+    dict.mp$ass_subscript(new Sk.builtin.str('pitch_deg'), new Sk.builtin.float_(radiansToDegrees(pitchRad)));
+    dict.mp$ass_subscript(new Sk.builtin.str('yaw_deg'), new Sk.builtin.float_(radiansToDegrees(yawRad)));
+    return dict;
+  };
 
   function applyRotorOverride(index, rpmValue, { source = 'updateRot', annotation } = {}) {
     const label = formatPropLabel(index);
@@ -509,6 +610,21 @@ async function runAutomation({ fromAuto = false } = {}) {
   Sk.sysmodules = new Sk.builtin.dict([]);
   rotorLabels.forEach((label, index) => {
     Sk.builtins[`Prop${index + 1}`] = new Sk.builtin.str(label);
+  });
+
+  Sk.builtins.__get_altitude = new Sk.builtin.func(function () {
+    const altitude = snapshotForScript?.state?.position?.[2] ?? 0;
+    return new Sk.builtin.float_(Number(altitude));
+  });
+
+  Sk.builtins.__get_actual_attitude = new Sk.builtin.func(function () {
+    const euler = snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
+    return toPyAttitude(euler);
+  });
+
+  Sk.builtins.__get_estimated_attitude = new Sk.builtin.func(function () {
+    const att = estimationForScript ?? snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
+    return toPyAttitude(att);
   });
 
   Sk.builtins.command = new Sk.builtin.func(function (time, throttle, roll, pitch, yaw) {
@@ -712,6 +828,12 @@ function handleSessionReset() {
 }
 
 const worker = new Worker(new URL('./worker/simWorker.js', import.meta.url), { type: 'module' });
+
+dom.resetWorldButton.addEventListener('click', () => {
+  autopStatus = '世界のリセットを要求しました…';
+  updateAutomationDisplays();
+  worker.postMessage({ type: 'resetWorld' });
+});
 
 worker.onmessage = (event) => {
   const data = event.data;

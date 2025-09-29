@@ -107,6 +107,26 @@ self.onmessage = (event) => {
       simulator.setRotorOverrides(msg.overrides ?? {}, { replace: !!msg.replace });
       break;
     }
+    case 'resetWorld': {
+      if (!simulator) break;
+      console.log('[SimWorker] Manual world reset requested');
+      const info = typeof simulator.resetWorld === 'function' ? simulator.resetWorld() : null;
+      totalSteps = 0;
+      publishedPackets = 0;
+      lastStep = null;
+      const snapshot = simulator.getSnapshot();
+      postMessage({
+        type: 'state',
+        snapshot,
+        estimation: lastStep?.estimation,
+        measurement: lastStep?.measurement,
+        errors: lastStep?.errors,
+        timeline: info?.timeline ?? snapshot.timeline,
+        sessionReset: true,
+        manualReset: true
+      });
+      break;
+    }
     default:
       console.warn('[SimWorker] Unknown message type', msg.type);
       break;
