@@ -13,7 +13,8 @@ import {
   ShadowGenerator,
   StandardMaterial,
   TransformNode,
-  Vector3
+  Vector3,
+  VertexBuffer
 } from '@babylonjs/core';
 import '@babylonjs/loaders';
 import { airframe } from './lib/airframeData.js';
@@ -36,6 +37,69 @@ export function createHangarViewport(canvas) {
   let actualQuat = [1, 0, 0, 0];
   let estimatedQuat = [1, 0, 0, 0];
   let position = [0, 0, 0];
+  let frameGroundOffset = 0.02;
+
+  function analyzeFrameGeometry(meshes) {
+    const boundsMin = [Infinity, Infinity, Infinity];
+    const boundsMax = [-Infinity, -Infinity, -Infinity];
+    const radii = [];
+
+    for (const mesh of meshes) {
+      const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+      if (!positions) continue;
+
+      for (let i = 0; i < positions.length; i += 3) {
+        const x = positions[i];
+        const y = positions[i + 1];
+        const z = positions[i + 2];
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+          continue;
+        }
+        if (x < boundsMin[0]) boundsMin[0] = x;
+        if (y < boundsMin[1]) boundsMin[1] = y;
+        if (z < boundsMin[2]) boundsMin[2] = z;
+        if (x > boundsMax[0]) boundsMax[0] = x;
+        if (y > boundsMax[1]) boundsMax[1] = y;
+        if (z > boundsMax[2]) boundsMax[2] = z;
+
+        const radius = Math.hypot(x, y);
+        if (Number.isFinite(radius)) {
+          radii.push(radius);
+        }
+      }
+    }
+
+    radii.sort((a, b) => a - b);
+    const medianRadius = radii.length ? radii[Math.floor(radii.length / 2)] : null;
+    const extents = boundsMax.map((value, index) => value - boundsMin[index]);
+
+    return {
+      medianRadius,
+      extents,
+      boundsMin,
+      boundsMax
+    };
+  }
+
+  function determineStaticRotation(extents) {
+    if (!extents) {
+      return Quaternion.Identity();
+    }
+    const smallest = Math.min(...extents);
+    const index = extents.findIndex((value) => value === smallest);
+
+    switch (index) {
+      case 2:
+        // STL was Z-up; rotate -90° around X so Z becomes Babylon Y.
+        return Quaternion.RotationAxis(Vector3.Right(), -Math.PI / 2);
+      case 0:
+        // X-up → rotate +90° around Z to align with Babylon Y.
+        return Quaternion.RotationAxis(Vector3.Forward(), Math.PI / 2);
+      case 1:
+      default:
+        return Quaternion.Identity();
+    }
+  }
 
   function createRoom(targetScene) {
     const room = MeshBuilder.CreateBox(
@@ -97,8 +161,8 @@ export function createHangarViewport(canvas) {
   function loadFrame(targetScene) {
     const frameDir = FRAME_PATH.substring(0, FRAME_PATH.lastIndexOf('/') + 1);
     const frameFile = FRAME_PATH.substring(frameDir.length);
-    const scale = airframe.geometry.wheelbase / 0.18;
-
+    let staticRotation = Quaternion.Identity();
+    let scale = 0.001;
     const frameMaterial = new StandardMaterial('jeno-frame-mat', targetScene);
     frameMaterial.diffuseColor = Color3.FromHexString('#38bdf8');
     frameMaterial.emissiveColor = Color3.FromHexString('#0f172a').scale(0.6);
@@ -113,10 +177,35 @@ export function createHangarViewport(canvas) {
     estimateMaterial.specularColor = Color3.Black();
 
     SceneLoader.ImportMesh('', frameDir, frameFile, targetScene, (meshes) => {
+      if (!meshes || meshes.length === 0) {
+        return;
+      }
+
+      const { medianRadius, extents, boundsMin } = analyzeFrameGeometry(meshes);
+      staticRotation = determineStaticRotation(extents);
+
+      if (typeof medianRadius === 'number' && medianRadius > 0) {
+        scale = airframe.geometry.armOffset / medianRadius;
+      } else if (extents && Number.isFinite(extents[0]) && Number.isFinite(extents[1])) {
+        const planarExtent = Math.hypot(extents[0], extents[1]);
+        if (planarExtent > 0) {
+          scale = airframe.geometry.wheelbase / planarExtent;
+        }
+      } else {
+        scale = 0.001;
+      }
+
+      if (Number.isFinite(boundsMin[2])) {
+        const scaledGround = boundsMin[2] * scale;
+        frameGroundOffset = Math.max(0.004, -scaledGround + 0.002);
+      } else {
+        frameGroundOffset = 0.02;
+      }
+
       meshes?.forEach((mesh) => {
         mesh.parent = droneRoot;
         mesh.scaling = new Vector3(scale, scale, scale);
-        mesh.rotationQuaternion = Quaternion.RotationAxis(Vector3.Right(), Math.PI / 2);
+        mesh.rotationQuaternion = staticRotation.clone();
         mesh.material = frameMaterial;
         mesh.receiveShadows = true;
         mesh.isPickable = false;
@@ -126,9 +215,8 @@ export function createHangarViewport(canvas) {
         const clone = mesh.clone(`${mesh.name || 'frame'}-estimate`);
         if (clone) {
           clone.parent = estimateRoot;
-          if (clone.rotationQuaternion) {
-            clone.rotationQuaternion = clone.rotationQuaternion.clone();
-          }
+          clone.scaling = new Vector3(scale, scale, scale);
+          clone.rotationQuaternion = staticRotation.clone();
           clone.material = estimateMaterial;
           clone.receiveShadows = false;
           clone.isPickable = false;
@@ -184,7 +272,7 @@ export function createHangarViewport(canvas) {
 
   function updateTransforms() {
     if (!droneRoot) return;
-    const y = Math.max(position[2], 0) + 0.02;
+    const y = Math.max(position[2], 0) + frameGroundOffset;
     droneRoot.position.set(position[0], y, -position[1]);
     if (droneRoot.rotationQuaternion) {
       droneRoot.rotationQuaternion.set(actualQuat[1], actualQuat[2], actualQuat[3], actualQuat[0]);
