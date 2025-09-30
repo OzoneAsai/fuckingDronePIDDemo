@@ -7,7 +7,7 @@ JeNo 3 フレーム（`tmp.json` に含まれる機体データ）をもとに�
 - **UI / 可視化**: Vite + Vanilla JavaScript + Babylon.js
 - **シミュレーション**: Web Worker 内で剛体力学、プロペラ推力モデル、相補フィルタ、PID 制御を実装
 - **機体データ**: `tmp.json` から質量・慣性・推力係数を読込
-- **Skulpt 連携**: `command()`・`sleep()`・`hold()`・`prop_*.power()`・`updateRot()` に加え、`getAbsAlt()`・`getToFAlt()`・`getIMUVal()`・`getMagVal()` などのセンサー API を提供し、Python で離陸シナリオを記述
+- **Skulpt 連携**: `prop_*.power()` でロータのアナログ出力を直接制御し、`automation_setup()` / `automation_tick(ctx)` / `automation_reset()` の各フックから `getAbsAlt()`・`getToFAlt()`・`getIMUVal()`・`getMagVal()` など最新センサーを参照してリアルタイム制御を記述（`command()` / `updateRot()` は無効化）
 
 ## セットアップ
 
@@ -54,11 +54,11 @@ npm run preview
 - **ハンガーシーン**: 床・壁・天井と影を備えた Babylon.js の室内空間に JeNo 3 STL を配置。推定姿勢は半透明ワイヤーフレームで重ねて表示します。
 - **セットポイント & PID**: Roll / Pitch / Yaw を度単位で、Throttle を 0〜100 % で指示。PID ゲインは各軸ごとにスライダで調整し、即座に Web Worker へ送信されます。
 - **Skulpt 自動化**:
-  - `hold(...)` / `sleep(seconds)` / `at(time_s, ...)` で `script_time` を進めつつコマンドを登録 (`None` で前回値維持)。
-  - `getAbsAlt()` / `get_tof_alt()` / `getIMUVal()` / `getMagVal()` / `get_actual_attitude()` / `get_estimated_attitude()` で最新のセンサー推定を参照。
-  - `prop_1.power(255)` など 0〜255 のアナログ指定でロータを駆動（prop_1〜prop_4 は第一象限から時計回りに対応）。
-  - `updateRot(Prop1, 12000)` で特定ロータの RPM を上書きし、`None` で解除。
-  - 実行ログとエラーはコンソールに逐次表示され、セッションリセット時には自動で再適用されます。
+  - `automation_setup(ctx)` で初期化、`automation_tick(ctx)` で各ワーカーフレーム（約 60 Hz）の最新センサー `ctx` を受け取り、`prop_*.power()` でロータ出力を更新。`automation_reset(ctx)` はセッションリセット時に呼ばれます。
+  - `getAbsAlt()` / `get_tof_alt()` / `getIMUVal()` / `getMagVal()` / `get_actual_attitude()` / `get_estimated_attitude()` といったビルトインで IMU 推定を取得し、`get_timeline()` で現在時刻・残り時間を確認可能。
+  - プレリュードで `ANALOG_MAX` / `HOVER_ANALOG` / `HOVER_RPM` / `FIELD_HEIGHT` / `ALTITUDE_BAND` / `RAD_TO_DEG` / `clamp()` などの定数・ヘルパーを自動定義済み。
+  - `prop_1.power(…)` など 0〜255 指定でロータを駆動（prop_1〜prop_4 は第一象限から時計回りに対応）。`command()` / `updateRot()` は利用できません。
+  - 実行ログとエラーはコンソールに逐次表示され、セッションリセット時には Python 側の `automation_reset` が呼ばれます。
 - **Altitude スコア**: フィールド上限 50 m、狙いの高度コリドー 23〜26 m に滞在した累積時間を得点化し、メトリクスとチャートで可視化。
 - **テレメトリチャート**: 高度（STL 接地オフセット込み）、高度スコア、姿勢スコア（姿勢誤差の RMS を 0〜100 点に換算）を 30 s ウィンドウでプロット。
 
@@ -67,7 +67,7 @@ npm run preview
 ```
 UI (Vanilla JS)
  ├─ Babylon.js ハンガー表示
- ├─ Skulpt (Python → command/updateRot)
+ ├─ Skulpt (Python automation_tick → prop.power overrides)
  └─ Web Worker (200 Hz)
       │
       ├─ Quad 剛体力学 + 地面接触

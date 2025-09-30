@@ -9,63 +9,127 @@ import { radiansToDegrees, clamp } from './lib/math.js';
 const timelineDuration = 30;
 const FIELD_HEIGHT = airframe.env.fieldHeight ?? 50;
 const ALTITUDE_SCORE_BAND = { min: 23, max: 26 };
+const ANALOG_MAX_POWER = 255;
+const MAX_RPM = Number(propulsionLimits.maxRpm ?? 1) || 1;
+const HOVER_RPM = Number(propulsionLimits.hoverRpm ?? MAX_RPM * 0.4) || 0;
+const HOVER_ANALOG = Math.round(
+  Math.max(0, Math.min(((HOVER_RPM / MAX_RPM) || 0) * ANALOG_MAX_POWER, ANALOG_MAX_POWER))
+);
+const ALTITUDE_TARGET = (ALTITUDE_SCORE_BAND.min + ALTITUDE_SCORE_BAND.max) / 2;
 const defaultPython = `# === Automation bootstrap ===
 # prop_1 は第一象限 (カメラを上にしたときに前右) のロータです。
 # prop_2, prop_3, prop_4 は反時計回りに配置されています。
 #
-# 付属のヘルパー:
-#   - sleep(seconds): タイムラインを seconds 進めます。
-#   - hold(throttle, roll, pitch, yaw): 現在の script_time でコマンドを登録します。
-#   - at(time_s, ...): script_time を time_s に移動してコマンドを登録します。
-#   - get_abs_alt() / getAbsAlt(): センサーに基づく高度 [m]。
-#   - get_tof_alt() / getToFAlt(): 姿勢に追従した ToF 推定距離 [m] (取得できない場合 None)。
-#   - getIMUVal(): ジャイロ・加速度の推定値 (dict)。
-#   - getMagVal(): 機体座標系での磁力ベクトル推定 (tuple)。
-#   - get_estimated_attitude(): 推定姿勢 (deg/rad) の dict。
-#   - get_actual_attitude(): 実姿勢 (deg/rad) の dict。
+# このデモでは command()/updateRot() を使わず、prop_*.power() で
+# ロータのアナログ出力を直接制御します。IMU・高度センサーに基づく
+# PID で 23–26 m の高度コリドーを狙います。
+TARGET_ALTITUDE = ${ALTITUDE_TARGET.toFixed(2)}
+COLLECTIVE_MIN = 60.0
+COLLECTIVE_MAX = 220.0
+IDLE_POWER = 55.0
+SPINUP_DELAY = 0.15
+SPINUP_RAMP = 1.0
+ALT_KP = 6.5
+ALT_KI = 1.6
+ALT_KD = 9.0
+ALT_I_LIMIT = 8.0
+ROLL_P = 3.0
+ROLL_D = 0.12
+PITCH_P = 3.0
+PITCH_D = 0.12
+YAW_P = 1.5
+YAW_D = 0.08
+ATT_LIMIT = 45.0
+
+STATE = {
+    "integral_alt": 0.0,
+    "last_alt": 0.0,
+    "last_log_time": -10.0
+}
+
 def log(message):
     print(f"[auto] {message}")
 
-def spin_props(power):
-    prop_1.power(power)
-    prop_2.power(power)
-    prop_3.power(power)
-    prop_4.power(power)
+def _clamp_collective(value):
+    return clamp(value, COLLECTIVE_MIN, COLLECTIVE_MAX)
 
-def getError():
-    est = get_estimated_attitude()
-    act = get_actual_attitude()
-    return {
-        "roll_deg": act["roll_deg"] - est["roll_deg"],
-        "pitch_deg": act["pitch_deg"] - est["pitch_deg"],
-        "yaw_deg": act["yaw_deg"] - est["yaw_deg"],
-    }
+def automation_setup(ctx=None):
+    log("Automation setup: clearing integrators and idling props")
+    STATE["integral_alt"] = 0.0
+    STATE["last_alt"] = float(get_abs_alt() or 0.0)
+    STATE["last_log_time"] = -10.0
+    for channel in props:
+        channel.power(0)
 
-def stabilize(kp=4.0, ki=0.5, kd=1.5):
-    log("Stabilize around hover throttle")
-    hold(throttle=0.50, roll=0.0, pitch=0.0, yaw=0.0)
-    sleep(2.5)
-    hold(throttle=0.48, roll=0.0, pitch=0.0, yaw=0.0)
-    sleep(2.0)
+def automation_reset(ctx=None):
+    log("Session reset detected, reinitializing controller state")
+    STATE["integral_alt"] = 0.0
+    STATE["last_alt"] = float(get_abs_alt() or 0.0)
+    STATE["last_log_time"] = -10.0
+    for channel in props:
+        channel.power(0)
 
-def liftOff():
-    log("Spooling props for liftoff")
-    spin_props(255)
-    sleep(0.8)
-    hold(throttle=0.55, roll=0.0, pitch=0.0, yaw=0.0)
-    sleep(3.2)
-    if get_altitude() >= 0.6:
-        stabilize()
-    log("Preparing to land")
-    hold(throttle=0.44, roll=0.0, pitch=0.0, yaw=0.0)
-    sleep(2.0)
-    hold(throttle=0.30, roll=0.0, pitch=0.0, yaw=0.0)
-    sleep(1.2)
-    log("Cutting motors")
-    spin_props(0)
-    hold(throttle=0.0, roll=0.0, pitch=0.0, yaw=0.0)
+def _timeline_time(ctx):
+    if not ctx:
+        return 0.0
+    timeline = ctx.get("timeline") or {}
+    return float(timeline.get("time", 0.0))
 
-liftOff()
+def automation_tick(ctx=None):
+    dt = 0.016
+    if ctx:
+        dt = max(float(ctx.get("dt", dt)), 0.005)
+    t = _timeline_time(ctx)
+    altitude = float(get_abs_alt() or 0.0)
+    error = TARGET_ALTITUDE - altitude
+
+    if t < 0.5:
+        STATE["integral_alt"] = 0.0
+
+    STATE["integral_alt"] = clamp(
+        STATE["integral_alt"] + error * dt,
+        -ALT_I_LIMIT,
+        ALT_I_LIMIT,
+    )
+    rate = 0.0
+    if dt > 1e-3:
+        rate = (altitude - STATE["last_alt"]) / dt
+    STATE["last_alt"] = altitude
+
+    collective_command = HOVER_ANALOG + ALT_KP * error + ALT_KI * STATE["integral_alt"] - ALT_KD * rate
+    collective_command = _clamp_collective(collective_command)
+    spool = clamp((t - SPINUP_DELAY) / SPINUP_RAMP, 0.0, 1.0)
+    base = _clamp_collective(IDLE_POWER + spool * (collective_command - IDLE_POWER))
+
+    attitude = get_estimated_attitude()
+    imu = getIMUVal()
+    gyro = imu.get("gyro", (0.0, 0.0, 0.0))
+    gx = float(gyro[0]) * RAD_TO_DEG if len(gyro) >= 1 else 0.0
+    gy = float(gyro[1]) * RAD_TO_DEG if len(gyro) >= 2 else 0.0
+    gz = float(gyro[2]) * RAD_TO_DEG if len(gyro) >= 3 else 0.0
+
+    roll_error = -float(attitude["roll_deg"])
+    pitch_error = -float(attitude["pitch_deg"])
+    yaw_error = -float(attitude["yaw_deg"])
+
+    roll_term = clamp(ROLL_P * roll_error - ROLL_D * gx, -ATT_LIMIT, ATT_LIMIT)
+    pitch_term = clamp(PITCH_P * pitch_error - PITCH_D * gy, -ATT_LIMIT, ATT_LIMIT)
+    yaw_term = clamp(YAW_P * yaw_error - YAW_D * gz, -ATT_LIMIT, ATT_LIMIT)
+
+    power1 = _clamp_collective(base + roll_term - pitch_term - yaw_term)
+    power2 = _clamp_collective(base - roll_term - pitch_term + yaw_term)
+    power3 = _clamp_collective(base - roll_term + pitch_term - yaw_term)
+    power4 = _clamp_collective(base + roll_term + pitch_term + yaw_term)
+
+    prop_1.power(power1)
+    prop_2.power(power2)
+    prop_3.power(power3)
+    prop_4.power(power4)
+
+    last_log = STATE.get("last_log_time", -10.0)
+    if t - last_log >= 1.0:
+        log(f"t={t:4.1f}s alt={altitude:5.2f}m err={error:+5.2f} power≈{base:6.1f}")
+        STATE["last_log_time"] = t
 `;
 
 const rotorLabels = Array.from({ length: airframe.propulsion.rotorCount }, (_, i) => `Prop${i + 1}`);
@@ -84,12 +148,9 @@ rotorLabels.forEach((label, index) => {
   aliases.forEach((alias) => propAliasMap.set(String(alias).toLowerCase(), index));
 });
 
-const ANALOG_MAX_POWER = 255;
-
 function buildPropPrelude() {
   const lines = [
     '# === Auto-generated prop helpers (created by the host app) ===',
-    'ANALOG_MAX = 255',
     'class _PropChannel:',
     '    def __init__(self, identifier):',
     '        self._identifier = identifier',
@@ -139,26 +200,21 @@ function buildPropPrelude() {
   lines.push('#   prop_3 -> 第三象限 (-X, -Y / 後左)');
   lines.push('#   prop_4 -> 第四象限 (+X, -Y / 後右)');
   lines.push('');
-  lines.push('# Timeline helpers');
-  lines.push('script_time = 0.0');
+  lines.push('# Environment constants & helpers');
+  lines.push(`ANALOG_MAX = ${ANALOG_MAX_POWER}`);
+  lines.push(`MAX_RPM = ${MAX_RPM.toFixed(2)}`);
+  lines.push(`HOVER_RPM = ${HOVER_RPM.toFixed(2)}`);
+  lines.push(`HOVER_ANALOG = ${HOVER_ANALOG}`);
+  lines.push(`FIELD_HEIGHT = ${FIELD_HEIGHT.toFixed(2)}`);
+  lines.push(`ALTITUDE_BAND = (${ALTITUDE_SCORE_BAND.min.toFixed(2)}, ${ALTITUDE_SCORE_BAND.max.toFixed(2)})`);
+  lines.push('RAD_TO_DEG = 57.29577951308232');
   lines.push('');
-  lines.push('def reset_clock() -> None:');
-  lines.push('    global script_time');
-  lines.push('    script_time = 0.0');
-  lines.push('');
-  lines.push('def sleep(seconds: float) -> None:');
-  lines.push('    global script_time');
-  lines.push('    if seconds is None:');
-  lines.push('        return');
-  lines.push('    script_time += float(seconds)');
-  lines.push('');
-  lines.push('def hold(throttle=None, roll=None, pitch=None, yaw=None) -> None:');
-  lines.push('    command(script_time, throttle, roll, pitch, yaw)');
-  lines.push('');
-  lines.push('def at(time_s: float, throttle=None, roll=None, pitch=None, yaw=None) -> None:');
-  lines.push('    global script_time');
-  lines.push('    script_time = float(time_s)');
-  lines.push('    command(script_time, throttle, roll, pitch, yaw)');
+  lines.push('def clamp(value, minimum, maximum):');
+  lines.push('    if value < minimum:');
+  lines.push('        return minimum');
+  lines.push('    if value > maximum:');
+  lines.push('        return maximum');
+  lines.push('    return value');
   lines.push('');
   lines.push('def get_abs_alt() -> float:');
   lines.push('    return __get_abs_alt()');
@@ -193,7 +249,23 @@ function buildPropPrelude() {
   lines.push('def get_actual_attitude() -> dict:');
   lines.push('    return __get_actual_attitude()');
   lines.push('');
-  lines.push('reset_clock()');
+  lines.push('def get_timeline() -> dict:');
+  lines.push('    return __get_timeline()');
+  lines.push('');
+  lines.push('def getTimeline() -> dict:');
+  lines.push('    return __get_timeline()');
+  lines.push('');
+  lines.push('def get_hover_power() -> float:');
+  lines.push('    return HOVER_ANALOG');
+  lines.push('');
+  lines.push('def getHoverPower() -> float:');
+  lines.push('    return HOVER_ANALOG');
+  lines.push('');
+  lines.push('def get_hover_rpm() -> float:');
+  lines.push('    return HOVER_RPM');
+  lines.push('');
+  lines.push('def getHoverRpm() -> float:');
+  lines.push('    return HOVER_RPM');
   lines.push('');
 
   return lines.join('\n');
@@ -504,6 +576,7 @@ let timeline = { time: 0, duration: timelineDuration, sessionId: 0, absolute: 0 
 let latestSnapshot = null;
 let latestEstimation = null;
 let latestMeasurement = null;
+let latestScores = null;
 let lastAutomationCommand = null;
 let autopConsole = '';
 let autopError = '';
@@ -517,6 +590,9 @@ const autopilot = {
   lastSessionId: 0,
   active: false,
   rotorOverrides: {},
+  rotorOverrideMap: null,
+  lastRotorOverrideHash: '',
+  python: null,
   loop: true
 };
 
@@ -586,6 +662,161 @@ function sendRotorOverrides(overrides = {}, replace = false) {
   worker.postMessage({ type: 'rotorOverrides', overrides, replace });
 }
 
+function appendAutomationOutput(text, { immediate = true } = {}) {
+  if (!text) return;
+  autopConsole = `${autopConsole}${text}`;
+  const limit = 8000;
+  if (autopConsole.length > limit) {
+    autopConsole = autopConsole.slice(autopConsole.length - limit);
+  }
+  if (immediate) {
+    updateAutomationDisplays();
+  }
+}
+
+function syncRotorOverridesFromMap({ force = false } = {}) {
+  const map = autopilot.python?.rotorOverrideMap ?? autopilot.rotorOverrideMap;
+  if (!map) return;
+  const overrides = {};
+  map.forEach((value, index) => {
+    overrides[index] = value;
+  });
+  const serialized = JSON.stringify(overrides);
+  if (autopilot.python) {
+    if (!force && autopilot.python.lastOverrideHash === serialized) {
+      return;
+    }
+    autopilot.python.lastOverrideHash = serialized;
+  } else {
+    if (!force && autopilot.lastRotorOverrideHash === serialized) {
+      return;
+    }
+    autopilot.lastRotorOverrideHash = serialized;
+  }
+  autopilot.rotorOverrides = overrides;
+  sendRotorOverrides(overrides, true);
+}
+
+function buildAutomationContext({ dt = 0, reason = 'tick' } = {}) {
+  const timelineState = timeline ?? {};
+  const duration = Number(timelineState.duration ?? timelineDuration);
+  const time = Number(timelineState.time ?? 0);
+  const remaining = Math.max(0, duration - time);
+  const absolute = Number(timelineState.absolute ?? time);
+
+  const measurement = latestMeasurement ?? {};
+  const estimation = latestEstimation ?? {};
+  const snapshot = latestSnapshot ?? {};
+  const sensors = {
+    abs_altitude: measurement.absAltitude ?? snapshot.state?.position?.[2] ?? 0,
+    tof_altitude: measurement.tof ?? measurement.tofAltitude ?? null,
+    imu: {
+      gyro: Array.isArray(measurement.gyro) ? [...measurement.gyro] : [0, 0, 0],
+      acc: Array.isArray(measurement.acc) ? [...measurement.acc] : [0, 0, 0],
+      mag: Array.isArray(measurement.mag) ? [...measurement.mag] : [0, 0, 0]
+    }
+  };
+
+  return {
+    reason,
+    dt,
+    timeline: {
+      time,
+      duration,
+      remaining,
+      absolute,
+      session: Number(timelineState.sessionId ?? 0)
+    },
+    sensors,
+    estimation: {
+      roll: estimation.roll ?? 0,
+      pitch: estimation.pitch ?? 0,
+      yaw: estimation.yaw ?? 0,
+      roll_deg: radiansToDegrees(estimation.roll ?? 0),
+      pitch_deg: radiansToDegrees(estimation.pitch ?? 0),
+      yaw_deg: radiansToDegrees(estimation.yaw ?? 0),
+      quaternion: estimation.quaternion ?? snapshot.state?.quaternion ?? [0, 0, 0, 1]
+    },
+    actual: {
+      roll_deg: snapshot.state?.eulerDeg?.roll ?? 0,
+      pitch_deg: snapshot.state?.eulerDeg?.pitch ?? 0,
+      yaw_deg: snapshot.state?.eulerDeg?.yaw ?? 0,
+      quaternion: snapshot.state?.quaternion ?? [0, 0, 0, 1],
+      position: snapshot.state?.position ?? [0, 0, 0]
+    },
+    scores: latestScores ?? {},
+    hover: {
+      analog: HOVER_ANALOG,
+      rpm: HOVER_RPM,
+      maxAnalog: ANALOG_MAX_POWER,
+      maxRpm: MAX_RPM
+    },
+    altitude_band: ALTITUDE_SCORE_BAND,
+    field_height: FIELD_HEIGHT
+  };
+}
+
+async function safeCallPython(func, args = [], { hookName = 'call', disableOnError = true } = {}) {
+  if (!func || typeof func.tp$call !== 'function') return null;
+  const pyArgs = args.map((arg) => Sk.ffi.remapToPy(arg));
+  try {
+    const result = await Sk.misceval.asyncToPromise(() => Sk.misceval.callsimOrSuspend(func, ...pyArgs));
+    autopError = '';
+    return result;
+  } catch (error) {
+    const message = error?.toString?.() ?? 'Unknown error';
+    autopError = message;
+    autopStatus = `Python ${hookName} でエラー`;
+    appendAutomationOutput(`${message}\n`);
+    console.error('[automation] Python error in', hookName, error);
+    if (disableOnError) {
+      autopilot.python = null;
+      autopilot.rotorOverrideMap = null;
+      autopilot.rotorOverrides = {};
+      autopilot.lastRotorOverrideHash = '';
+      sendRotorOverrides({}, true);
+    }
+    updateAutomationDisplays();
+    return null;
+  }
+}
+
+async function runPythonAutomationTick() {
+  const python = autopilot.python;
+  if (!python || !python.tick) return;
+  if (python.busy) return;
+  python.busy = true;
+  try {
+    if (python.needsReset && python.reset) {
+      python.needsReset = false;
+      await safeCallPython(python.reset, [buildAutomationContext({ dt: 0, reason: 'reset' })], {
+        hookName: 'automation_reset'
+      });
+    }
+
+    const timeNow = timeline?.time ?? 0;
+    const dt = python.lastTimelineTime !== undefined ? Math.max(0, timeNow - python.lastTimelineTime) : 0;
+    python.lastTimelineTime = timeNow;
+
+    const result = await safeCallPython(python.tick, [buildAutomationContext({ dt, reason: 'tick' })], {
+      hookName: 'automation_tick'
+    });
+
+    if (result !== null && autopilot.python === python) {
+      syncRotorOverridesFromMap();
+      const shouldUpdateStatus =
+        python.lastStatusUpdate === undefined || Math.abs(timeNow - python.lastStatusUpdate) >= 0.25;
+      if (shouldUpdateStatus) {
+        autopStatus = `Python制御 t=${timeNow.toFixed(2)} s`;
+        python.lastStatusUpdate = timeNow;
+        updateAutomationDisplays();
+      }
+    }
+  } finally {
+    python.busy = false;
+  }
+}
+
 async function runAutomation({ fromAuto = false } = {}) {
   if (!fromAuto) {
     defaultAutomationArmed = false;
@@ -597,9 +828,11 @@ async function runAutomation({ fromAuto = false } = {}) {
 
   const queue = [];
   const rotorOverrideMap = new Map();
-  const snapshotForScript = latestSnapshot;
-  const estimationForScript = latestEstimation;
-  const measurementForScript = latestMeasurement;
+  autopilot.rotorOverrideMap = rotorOverrideMap;
+
+  if (!fromAuto) {
+    autopilot.python = null;
+  }
 
   const toPyAttitude = (attitude = {}) => {
     const rollRad = Number(attitude.roll ?? attitude.roll_rad ?? 0);
@@ -615,14 +848,16 @@ async function runAutomation({ fromAuto = false } = {}) {
     return dict;
   };
 
-  function applyRotorOverride(index, rpmValue, { source = 'updateRot', annotation } = {}) {
+  function applyRotorOverride(index, rpmValue, { source = 'prop.power', annotation } = {}) {
     const label = formatPropLabel(index);
-    if (rpmValue === null) {
-      let line = `${source}: ${label} オーバーライド解除`;
-      if (annotation) line += ` ${annotation}`;
+    if (rpmValue === null || rpmValue === undefined) {
       rotorOverrideMap.set(index, null);
-      autopConsole = `${autopConsole}${line}\n`;
-      updateAutomationDisplays();
+      const shouldLog = !autopilot.python || !autopilot.python.tick;
+      if (shouldLog) {
+        let line = `${source}: ${label} オーバーライド解除`;
+        if (annotation) line += ` ${annotation}`;
+        appendAutomationOutput(`${line}\n`);
+      }
       return null;
     }
 
@@ -631,26 +866,27 @@ async function runAutomation({ fromAuto = false } = {}) {
       throw new Sk.builtin.ValueError(`${source}: RPM には有限の数値を指定してください`);
     }
 
-    const clamped = Math.max(0, Math.min(rpmNumber, propulsionLimits.maxRpm));
-    let line = `${source}: ${label} → ${clamped.toFixed(0)} rpm`;
-    if (annotation) {
-      line += ` ${annotation}`;
-    }
-    if (clamped !== rpmNumber) {
-      line += ` (入力 ${rpmNumber.toFixed(0)} rpm をクランプ)`;
+    const clamped = Math.max(0, Math.min(rpmNumber, MAX_RPM));
+    const previous = rotorOverrideMap.get(index);
+    rotorOverrideMap.set(index, clamped);
+
+    const shouldLog =
+      !autopilot.python || !autopilot.python.tick || previous === undefined || previous === null;
+
+    if (shouldLog) {
+      let line = `${source}: ${label} → ${clamped.toFixed(0)} rpm`;
+      if (annotation) line += ` ${annotation}`;
+      if (clamped !== rpmNumber) {
+        line += ` (入力 ${rpmNumber.toFixed(0)} rpm をクランプ)`;
+      }
+      appendAutomationOutput(`${line}\n`);
     }
 
-    rotorOverrideMap.set(index, clamped);
-    autopConsole = `${autopConsole}${line}\n`;
-    updateAutomationDisplays();
     return clamped;
   }
 
   Sk.configure({
-    output: (text) => {
-      autopConsole += text;
-      updateAutomationDisplays();
-    },
+    output: (text) => appendAutomationOutput(text),
     read: builtinRead,
     __future__: Sk.python3,
     execLimit: 10000
@@ -662,11 +898,12 @@ async function runAutomation({ fromAuto = false } = {}) {
   });
 
   const altitudeBuiltin = new Sk.builtin.func(function () {
+    const measurement = latestMeasurement ?? {};
+    const snapshot = latestSnapshot ?? {};
     const rawAltitude =
-      measurementForScript?.altitude?.estimated ??
-      measurementForScript?.alt ??
-      measurementForScript?.absAltitude ??
-      snapshotForScript?.state?.position?.[2] ??
+      measurement.absAltitude ??
+      measurement.altitude ??
+      snapshot.state?.position?.[2] ??
       0;
     const clamped = Math.max(0, Math.min(Number(rawAltitude) || 0, FIELD_HEIGHT));
     return new Sk.builtin.float_(clamped);
@@ -677,17 +914,37 @@ async function runAutomation({ fromAuto = false } = {}) {
   Sk.builtins.get_altitude = altitudeBuiltin;
 
   Sk.builtins.__get_actual_attitude = new Sk.builtin.func(function () {
-    const euler = snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
+    const snapshot = latestSnapshot ?? {};
+    const euler = snapshot.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
     return toPyAttitude(euler);
   });
 
   Sk.builtins.__get_estimated_attitude = new Sk.builtin.func(function () {
-    const att = estimationForScript ?? snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
-    return toPyAttitude(att);
+    const estimation = latestEstimation ?? {};
+    return toPyAttitude(estimation);
   });
 
+  const timelineBuiltin = new Sk.builtin.func(function () {
+    const state = timeline ?? {};
+    const duration = Number(state.duration ?? timelineDuration);
+    const time = Number(state.time ?? 0);
+    const remaining = Math.max(0, duration - time);
+    const absolute = Number(state.absolute ?? time);
+    return Sk.ffi.remapToPy({
+      time,
+      duration,
+      remaining,
+      absolute,
+      session: Number(state.sessionId ?? 0)
+    });
+  });
+  Sk.builtins.__get_timeline = timelineBuiltin;
+  Sk.builtins.get_timeline = timelineBuiltin;
+  Sk.builtins.getTimeline = timelineBuiltin;
+
   const tofBuiltin = new Sk.builtin.func(function () {
-    const tof = measurementForScript?.tof;
+    const measurement = latestMeasurement ?? {};
+    const tof = measurement.tof ?? measurement.tofAltitude;
     if (tof === null || tof === undefined) {
       return Sk.builtin.none.none$;
     }
@@ -699,8 +956,9 @@ async function runAutomation({ fromAuto = false } = {}) {
   Sk.builtins.get_tof_alt = tofBuiltin;
 
   const imuBuiltin = new Sk.builtin.func(function () {
-    const gyro = Array.isArray(measurementForScript?.gyro) ? measurementForScript.gyro.map((v) => Number(v) || 0) : [0, 0, 0];
-    const acc = Array.isArray(measurementForScript?.acc) ? measurementForScript.acc.map((v) => Number(v) || 0) : [0, 0, 0];
+    const measurement = latestMeasurement ?? {};
+    const gyro = Array.isArray(measurement.gyro) ? measurement.gyro.map((v) => Number(v) || 0) : [0, 0, 0];
+    const acc = Array.isArray(measurement.acc) ? measurement.acc.map((v) => Number(v) || 0) : [0, 0, 0];
     return Sk.ffi.remapToPy({ gyro, acc });
   });
   Sk.builtins.__get_imu = imuBuiltin;
@@ -708,56 +966,20 @@ async function runAutomation({ fromAuto = false } = {}) {
   Sk.builtins.get_imu = imuBuiltin;
 
   const magBuiltin = new Sk.builtin.func(function () {
-    const mag = Array.isArray(measurementForScript?.mag) ? measurementForScript.mag.map((v) => Number(v) || 0) : [0, 0, 0];
+    const measurement = latestMeasurement ?? {};
+    const mag = Array.isArray(measurement.mag) ? measurement.mag.map((v) => Number(v) || 0) : [0, 0, 0];
     return Sk.ffi.remapToPy(mag);
   });
   Sk.builtins.__get_mag = magBuiltin;
   Sk.builtins.getMagVal = magBuiltin;
   Sk.builtins.get_mag = magBuiltin;
 
-  Sk.builtins.command = new Sk.builtin.func(function (time, throttle, roll, pitch, yaw) {
-    if (time === undefined) {
-      throw new Sk.builtin.ValueError('command() には少なくとも時間が必要です');
-    }
-    const toJs = (value) => {
-      if (value === undefined) return undefined;
-      const js = Sk.ffi.remapToJs(value);
-      return js === null ? undefined : js;
-    };
-    const timeJs = Number(toJs(time));
-    if (!Number.isFinite(timeJs) || timeJs < 0) {
-      throw new Sk.builtin.ValueError('時間は0以上の数値で指定してください');
-    }
-    queue.push({
-      time: timeJs,
-      throttle: toJs(throttle),
-      roll: toJs(roll),
-      pitch: toJs(pitch),
-      yaw: toJs(yaw)
-    });
-    return Sk.builtin.none.none$;
+  Sk.builtins.command = new Sk.builtin.func(function () {
+    throw new Sk.builtin.RuntimeError('command() は無効化されています。prop.power() を使用してください。');
   });
 
-  Sk.builtins.updateRot = new Sk.builtin.func(function (prop, rpm) {
-    if (prop === undefined || rpm === undefined) {
-      throw new Sk.builtin.ValueError('updateRot(prop, rpm) には2つの引数が必要です');
-    }
-    const identifier = Sk.ffi.remapToJs(prop);
-    const index = resolvePropIdentifier(identifier);
-    if (index === null) {
-      throw new Sk.builtin.ValueError('updateRot(): Prop1〜Prop4 など既知の識別子で指定してください');
-    }
-    const rpmJs = Sk.ffi.remapToJs(rpm);
-    if (rpmJs === null) {
-      applyRotorOverride(index, null, { source: 'updateRot' });
-      return Sk.builtin.none.none$;
-    }
-    const rpmNumber = Number(rpmJs);
-    if (!Number.isFinite(rpmNumber)) {
-      throw new Sk.builtin.ValueError('updateRot(): RPM には数値を指定してください');
-    }
-    applyRotorOverride(index, rpmNumber, { source: 'updateRot' });
-    return Sk.builtin.none.none$;
+  Sk.builtins.updateRot = new Sk.builtin.func(function () {
+    throw new Sk.builtin.RuntimeError('updateRot() は無効化されています。prop.power() を使用してください。');
   });
 
   Sk.builtins.__prop_power = new Sk.builtin.func(function (prop, power) {
@@ -782,7 +1004,7 @@ async function runAutomation({ fromAuto = false } = {}) {
       throw new Sk.builtin.ValueError('prop.power(): 0〜255 の数値を指定してください');
     }
     const clampedAnalog = Math.max(0, Math.min(analogNumber, ANALOG_MAX_POWER));
-    const rpmTarget = (clampedAnalog / ANALOG_MAX_POWER) * propulsionLimits.maxRpm;
+    const rpmTarget = (clampedAnalog / ANALOG_MAX_POWER) * MAX_RPM;
     let annotation = `(analog ${clampedAnalog.toFixed(0)}/${ANALOG_MAX_POWER})`;
     if (clampedAnalog !== analogNumber) {
       annotation += ` 入力 ${analogNumber.toFixed(0)} をクランプ`;
@@ -793,33 +1015,88 @@ async function runAutomation({ fromAuto = false } = {}) {
 
   try {
     const scriptBody = `${buildPropPrelude()}\n${dom.pythonEditor.value}`;
-    await Sk.misceval.asyncToPromise(() => Sk.importMainWithBody('<stdin>', false, scriptBody, true));
+    const module = await Sk.misceval.asyncToPromise(() =>
+      Sk.importMainWithBody('<stdin>', false, scriptBody, true)
+    );
+
     queue.sort((a, b) => a.time - b.time);
-    const overrides = {};
-    rotorOverrideMap.forEach((value, index) => {
-      overrides[index] = value;
-    });
     autopilot.schedule = queue;
     autopilot.pointer = 0;
     autopilot.lastSessionId = timeline.sessionId;
     autopilot.active = queue.length > 0;
-    autopilot.rotorOverrides = overrides;
 
-    const overrideCount = Object.keys(overrides).filter((key) => overrides[key] !== undefined).length;
+    const overrides = {};
+    rotorOverrideMap.forEach((value, index) => {
+      overrides[index] = value;
+    });
+    autopilot.rotorOverrides = overrides;
+    autopilot.lastRotorOverrideHash = JSON.stringify(overrides);
+
+    const overrideCount = Object.values(overrides).filter(
+      (value) => value !== undefined && value !== null
+    ).length;
+
+    const getAttr = (name) => {
+      try {
+        const attr = Sk.abstr.gattr(module, name, false);
+        return attr && typeof attr.tp$call === 'function' ? attr : null;
+      } catch (err) {
+        return null;
+      }
+    };
+
+    const pythonControllerCandidate = {
+      module,
+      tick: getAttr('automation_tick'),
+      setup: getAttr('automation_setup'),
+      reset: getAttr('automation_reset'),
+      rotorOverrideMap,
+      lastOverrideHash: '',
+      busy: false,
+      needsReset: false,
+      lastTimelineTime: timeline?.time ?? 0,
+      lastStatusUpdate: undefined
+    };
+
+    const hasPythonHooks =
+      pythonControllerCandidate.tick ||
+      pythonControllerCandidate.setup ||
+      pythonControllerCandidate.reset;
+
+    autopilot.python = hasPythonHooks ? pythonControllerCandidate : null;
+
     const summary = [];
     if (queue.length) summary.push(`コマンド ${queue.length} 件`);
     if (overrideCount) summary.push(`プロペラ更新 ${overrideCount} 件`);
-    autopStatus = summary.length ? `${summary.join(' / ')}を読み込みました。` : 'コマンドが登録されませんでした。';
-    lastAutomationCommand = null;
+    if (autopilot.python?.tick) summary.push('Python tick 有効');
+
+    autopStatus = summary.length ? `${summary.join(' / ')}を読み込みました。` : 'Pythonスクリプトを読み込みました。';
     updateAutomationDisplays();
-    sendRotorOverrides(overrides, true);
-    applyAutomation();
-    if (!queue.length && !overrideCount) {
-      autopConsole = `${autopConsole}\n⚠️ command() 呼び出しが見つかりません。`;
-      updateAutomationDisplays();
+
+    if (autopilot.python) {
+      await safeCallPython(autopilot.python.setup, [buildAutomationContext({ dt: 0, reason: 'setup' })], {
+        hookName: 'automation_setup',
+        disableOnError: true
+      });
+      syncRotorOverridesFromMap({ force: true });
+    } else {
+      syncRotorOverridesFromMap({ force: true });
     }
+
+    if (!queue.length && !overrideCount && !(autopilot.python && autopilot.python.tick)) {
+      appendAutomationOutput('⚠️ prop.power() を使った自動制御が検出できませんでした。\n');
+    }
+
+    lastAutomationCommand = null;
+    applyAutomation();
   } catch (error) {
+    autopilot.schedule = [];
+    autopilot.pointer = 0;
     autopilot.active = false;
+    autopilot.python = null;
+    autopilot.rotorOverrideMap = null;
+    autopilot.rotorOverrides = {};
+    autopilot.lastRotorOverrideHash = '';
     autopStatus = '自動制御プログラムの解析に失敗しました。';
     autopError = error.toString();
     updateAutomationDisplays();
@@ -833,6 +1110,9 @@ function clearAutomation() {
   autopilot.lastSessionId = timeline.sessionId;
   autopilot.active = false;
   autopilot.rotorOverrides = {};
+  autopilot.rotorOverrideMap = null;
+  autopilot.lastRotorOverrideHash = '';
+  autopilot.python = null;
   autopConsole = '';
   autopError = '';
   autopStatus = '自動制御をリセットしました。';
@@ -901,6 +1181,10 @@ function handleSessionReset() {
   altitudeScoreChart.clear();
   attitudeChart.clear();
   latestMeasurement = null;
+  if (autopilot.python) {
+    autopilot.python.needsReset = true;
+    autopilot.python.lastTimelineTime = timeline?.time ?? 0;
+  }
   if (Object.keys(autopilot.rotorOverrides || {}).length) {
     sendRotorOverrides(autopilot.rotorOverrides, true);
   }
@@ -960,7 +1244,8 @@ worker.onmessage = (event) => {
   dom.altitude.textContent = `${altitudeDisplay.toFixed(2)} m`;
   dom.status.textContent = altitudeRaw > 0.05 ? 'In flight' : 'Grounded';
 
-  const altitudeScoreInfo = (data.scores ?? snapshot.scores ?? {}).altitude ?? {};
+  latestScores = data.scores ?? snapshot.scores ?? latestScores;
+  const altitudeScoreInfo = (latestScores ?? {}).altitude ?? {};
   const altitudeScoreValue = Number(altitudeScoreInfo.score ?? 0);
   const altitudeTimeInBand = Number(altitudeScoreInfo.timeInBand ?? 0);
   const bandMin = Number(altitudeScoreInfo.band?.min ?? ALTITUDE_SCORE_BAND.min);
@@ -1001,6 +1286,7 @@ worker.onmessage = (event) => {
 
   workerReady = true;
   applyAutomation();
+  void runPythonAutomationTick();
 
   if (defaultAutomationArmed && !defaultAutomationLaunched) {
     defaultAutomationLaunched = true;
