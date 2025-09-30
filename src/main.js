@@ -7,6 +7,8 @@ import { propulsionLimits } from './lib/propulsion.js';
 import { radiansToDegrees, clamp } from './lib/math.js';
 
 const timelineDuration = 30;
+const FIELD_HEIGHT = airframe.env.fieldHeight ?? 50;
+const ALTITUDE_SCORE_BAND = { min: 23, max: 26 };
 const defaultPython = `# === Automation bootstrap ===
 # prop_1 は第一象限 (カメラを上にしたときに前右) のロータです。
 # prop_2, prop_3, prop_4 は反時計回りに配置されています。
@@ -15,7 +17,10 @@ const defaultPython = `# === Automation bootstrap ===
 #   - sleep(seconds): タイムラインを seconds 進めます。
 #   - hold(throttle, roll, pitch, yaw): 現在の script_time でコマンドを登録します。
 #   - at(time_s, ...): script_time を time_s に移動してコマンドを登録します。
-#   - get_altitude(): 現在の高度 [m]。
+#   - get_abs_alt() / getAbsAlt(): センサーに基づく高度 [m]。
+#   - get_tof_alt() / getToFAlt(): 姿勢に追従した ToF 推定距離 [m] (取得できない場合 None)。
+#   - getIMUVal(): ジャイロ・加速度の推定値 (dict)。
+#   - getMagVal(): 機体座標系での磁力ベクトル推定 (tuple)。
 #   - get_estimated_attitude(): 推定姿勢 (deg/rad) の dict。
 #   - get_actual_attitude(): 実姿勢 (deg/rad) の dict。
 def log(message):
@@ -155,8 +160,32 @@ function buildPropPrelude() {
   lines.push('    script_time = float(time_s)');
   lines.push('    command(script_time, throttle, roll, pitch, yaw)');
   lines.push('');
+  lines.push('def get_abs_alt() -> float:');
+  lines.push('    return __get_abs_alt()');
+  lines.push('');
+  lines.push('def getAbsAlt() -> float:');
+  lines.push('    return __get_abs_alt()');
+  lines.push('');
   lines.push('def get_altitude() -> float:');
-  lines.push('    return __get_altitude()');
+  lines.push('    return __get_abs_alt()');
+  lines.push('');
+  lines.push('def get_tof_alt() -> float | None:');
+  lines.push('    return __get_tof_alt()');
+  lines.push('');
+  lines.push('def getToFAlt() -> float | None:');
+  lines.push('    return __get_tof_alt()');
+  lines.push('');
+  lines.push('def getIMUVal() -> dict:');
+  lines.push('    return __get_imu()');
+  lines.push('');
+  lines.push('def get_imu() -> dict:');
+  lines.push('    return __get_imu()');
+  lines.push('');
+  lines.push('def getMagVal() -> tuple:');
+  lines.push('    return __get_mag()');
+  lines.push('');
+  lines.push('def get_mag() -> tuple:');
+  lines.push('    return __get_mag()');
   lines.push('');
   lines.push('def get_estimated_attitude() -> dict:');
   lines.push('    return __get_estimated_attitude()');
@@ -224,6 +253,11 @@ app.innerHTML = `
                 <h3>Altitude</h3>
                 <strong id="altitude-display">0.00 m</strong>
               </div>
+              <div class="metric-card" id="altitude-score-card">
+                <h3>Altitude Score</h3>
+                <strong id="altitude-score">0.0 pts</strong>
+                <span class="metric-subtext" id="altitude-band-detail">0.00 s in band</span>
+              </div>
               <div class="metric-card">
                 <h3>Attitude error RMS</h3>
                 <strong id="attitude-error">0.00 °</strong>
@@ -237,6 +271,10 @@ app.innerHTML = `
               <div class="chart-card">
                 <h3>Altitude</h3>
                 <canvas id="altitude-chart"></canvas>
+              </div>
+              <div class="chart-card">
+                <h3>Altitude Score</h3>
+                <canvas id="altitude-score-chart"></canvas>
               </div>
               <div class="chart-card">
                 <h3>Attitude Score</h3>
@@ -341,6 +379,9 @@ const dom = {
   attitudeActual: document.getElementById('attitude-actual'),
   attitudeEstimate: document.getElementById('attitude-estimate'),
   altitude: document.getElementById('altitude-display'),
+  altitudeScore: document.getElementById('altitude-score'),
+  altitudeBandDetail: document.getElementById('altitude-band-detail'),
+  altitudeScoreCard: document.getElementById('altitude-score-card'),
   attitudeError: document.getElementById('attitude-error'),
   pythonEditor: document.getElementById('python-editor'),
   automationStatus: document.getElementById('automation-status'),
@@ -443,8 +484,13 @@ dom.throttleSlider.addEventListener('input', () => {
 const canvas = document.getElementById('hangar-canvas');
 const viewport = createHangarViewport(canvas);
 const altitudeChart = createHistoryChart(document.getElementById('altitude-chart'), {
-  range: [-0.2, 3],
+  range: [0, FIELD_HEIGHT],
   color: '#22d3ee',
+  timeWindow: timelineDuration
+});
+const altitudeScoreChart = createHistoryChart(document.getElementById('altitude-score-chart'), {
+  range: [0, 100],
+  color: '#34d399',
   timeWindow: timelineDuration
 });
 const attitudeChart = createHistoryChart(document.getElementById('attitude-chart'), {
@@ -457,6 +503,7 @@ let workerReady = false;
 let timeline = { time: 0, duration: timelineDuration, sessionId: 0, absolute: 0 };
 let latestSnapshot = null;
 let latestEstimation = null;
+let latestMeasurement = null;
 let lastAutomationCommand = null;
 let autopConsole = '';
 let autopError = '';
@@ -515,7 +562,8 @@ function formatPropLabel(index) {
 
 function computeDisplayAltitude(rawAltitude = 0) {
   const offset = typeof viewport.getFrameGroundOffset === 'function' ? viewport.getFrameGroundOffset() : 0;
-  return Math.max(0, rawAltitude) + offset;
+  const clamped = Math.min(FIELD_HEIGHT, Math.max(0, rawAltitude));
+  return clamped + offset;
 }
 
 function sendSetpoint() {
@@ -551,6 +599,7 @@ async function runAutomation({ fromAuto = false } = {}) {
   const rotorOverrideMap = new Map();
   const snapshotForScript = latestSnapshot;
   const estimationForScript = latestEstimation;
+  const measurementForScript = latestMeasurement;
 
   const toPyAttitude = (attitude = {}) => {
     const rollRad = Number(attitude.roll ?? attitude.roll_rad ?? 0);
@@ -612,10 +661,20 @@ async function runAutomation({ fromAuto = false } = {}) {
     Sk.builtins[`Prop${index + 1}`] = new Sk.builtin.str(label);
   });
 
-  Sk.builtins.__get_altitude = new Sk.builtin.func(function () {
-    const altitude = snapshotForScript?.state?.position?.[2] ?? 0;
-    return new Sk.builtin.float_(Number(altitude));
+  const altitudeBuiltin = new Sk.builtin.func(function () {
+    const rawAltitude =
+      measurementForScript?.altitude?.estimated ??
+      measurementForScript?.alt ??
+      measurementForScript?.absAltitude ??
+      snapshotForScript?.state?.position?.[2] ??
+      0;
+    const clamped = Math.max(0, Math.min(Number(rawAltitude) || 0, FIELD_HEIGHT));
+    return new Sk.builtin.float_(clamped);
   });
+  Sk.builtins.__get_abs_alt = altitudeBuiltin;
+  Sk.builtins.__get_altitude = altitudeBuiltin;
+  Sk.builtins.getAbsAlt = altitudeBuiltin;
+  Sk.builtins.get_altitude = altitudeBuiltin;
 
   Sk.builtins.__get_actual_attitude = new Sk.builtin.func(function () {
     const euler = snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
@@ -626,6 +685,35 @@ async function runAutomation({ fromAuto = false } = {}) {
     const att = estimationForScript ?? snapshotForScript?.state?.euler ?? { roll: 0, pitch: 0, yaw: 0 };
     return toPyAttitude(att);
   });
+
+  const tofBuiltin = new Sk.builtin.func(function () {
+    const tof = measurementForScript?.tof;
+    if (tof === null || tof === undefined) {
+      return Sk.builtin.none.none$;
+    }
+    const value = Math.max(0, Math.min(Number(tof) || 0, FIELD_HEIGHT * 1.2));
+    return new Sk.builtin.float_(value);
+  });
+  Sk.builtins.__get_tof_alt = tofBuiltin;
+  Sk.builtins.getToFAlt = tofBuiltin;
+  Sk.builtins.get_tof_alt = tofBuiltin;
+
+  const imuBuiltin = new Sk.builtin.func(function () {
+    const gyro = Array.isArray(measurementForScript?.gyro) ? measurementForScript.gyro.map((v) => Number(v) || 0) : [0, 0, 0];
+    const acc = Array.isArray(measurementForScript?.acc) ? measurementForScript.acc.map((v) => Number(v) || 0) : [0, 0, 0];
+    return Sk.ffi.remapToPy({ gyro, acc });
+  });
+  Sk.builtins.__get_imu = imuBuiltin;
+  Sk.builtins.getIMUVal = imuBuiltin;
+  Sk.builtins.get_imu = imuBuiltin;
+
+  const magBuiltin = new Sk.builtin.func(function () {
+    const mag = Array.isArray(measurementForScript?.mag) ? measurementForScript.mag.map((v) => Number(v) || 0) : [0, 0, 0];
+    return Sk.ffi.remapToPy(mag);
+  });
+  Sk.builtins.__get_mag = magBuiltin;
+  Sk.builtins.getMagVal = magBuiltin;
+  Sk.builtins.get_mag = magBuiltin;
 
   Sk.builtins.command = new Sk.builtin.func(function (time, throttle, roll, pitch, yaw) {
     if (time === undefined) {
@@ -810,7 +898,9 @@ function applyAutomation() {
 
 function handleSessionReset() {
   altitudeChart.clear();
+  altitudeScoreChart.clear();
   attitudeChart.clear();
+  latestMeasurement = null;
   if (Object.keys(autopilot.rotorOverrides || {}).length) {
     sendRotorOverrides(autopilot.rotorOverrides, true);
   }
@@ -842,6 +932,7 @@ worker.onmessage = (event) => {
   if (!snapshot) return;
   latestSnapshot = snapshot;
   latestEstimation = data.estimation ?? latestEstimation;
+  latestMeasurement = data.measurement ?? latestMeasurement;
   timeline = snapshot.timeline ?? data.timeline ?? timeline;
 
   dom.session.textContent = String(timeline.sessionId ?? 0);
@@ -869,6 +960,21 @@ worker.onmessage = (event) => {
   dom.altitude.textContent = `${altitudeDisplay.toFixed(2)} m`;
   dom.status.textContent = altitudeRaw > 0.05 ? 'In flight' : 'Grounded';
 
+  const altitudeScoreInfo = (data.scores ?? snapshot.scores ?? {}).altitude ?? {};
+  const altitudeScoreValue = Number(altitudeScoreInfo.score ?? 0);
+  const altitudeTimeInBand = Number(altitudeScoreInfo.timeInBand ?? 0);
+  const bandMin = Number(altitudeScoreInfo.band?.min ?? ALTITUDE_SCORE_BAND.min);
+  const bandMax = Number(altitudeScoreInfo.band?.max ?? ALTITUDE_SCORE_BAND.max);
+  if (dom.altitudeScore) {
+    dom.altitudeScore.textContent = `${altitudeScoreValue.toFixed(1)} pts`;
+  }
+  if (dom.altitudeBandDetail) {
+    dom.altitudeBandDetail.textContent = `${altitudeTimeInBand.toFixed(2)} s in ${bandMin.toFixed(1)}–${bandMax.toFixed(1)} m`;
+  }
+  if (dom.altitudeScoreCard) {
+    dom.altitudeScoreCard.title = `Field height ${FIELD_HEIGHT.toFixed(1)} m / corridor ${bandMin.toFixed(1)}–${bandMax.toFixed(1)} m`;
+  }
+
   const errorsRad = data.errors ?? { roll: 0, pitch: 0, yaw: 0 };
   const errorsDeg = {
     roll: radiansToDegrees(errorsRad.roll ?? 0),
@@ -880,6 +986,7 @@ worker.onmessage = (event) => {
   const attitudeScore = Math.max(0, Math.min(100, 100 - rms * 8));
 
   altitudeChart.push({ time: timeline.time ?? 0, value: altitudeDisplay });
+  altitudeScoreChart.push({ time: timeline.time ?? 0, value: altitudeScoreValue });
   attitudeChart.push({ time: timeline.time ?? 0, value: attitudeScore });
 
   viewport.update({

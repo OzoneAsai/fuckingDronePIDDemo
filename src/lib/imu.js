@@ -1,8 +1,20 @@
 import { rotateVectorByMatrix, quatToRotationMatrix, transposeRotation } from './math.js';
 
-export function createImuModel({ gyroBiasStd = 0.001, accBiasStd = 0.02, gyroNoiseStd = 0.01, accNoiseStd = 0.1 } = {}) {
+export function createImuModel({
+  gyroBiasStd = 0.001,
+  accBiasStd = 0.02,
+  gyroNoiseStd = 0.01,
+  accNoiseStd = 0.1,
+  magBiasStd = 0.02,
+  magNoiseStd = 0.005,
+  altNoiseStd = 0.05,
+  tofNoiseStd = 0.02,
+  fieldHeight = 50,
+  earthMagField = [0.21, 0.0, 0.43]
+} = {}) {
   const gyroBias = [randomNormal() * gyroBiasStd, randomNormal() * gyroBiasStd, randomNormal() * gyroBiasStd];
   const accBias = [randomNormal() * accBiasStd, randomNormal() * accBiasStd, randomNormal() * accBiasStd];
+  const magBias = [randomNormal() * magBiasStd, randomNormal() * magBiasStd, randomNormal() * magBiasStd];
 
   function measure(state, worldAcc) {
     const gyro = [
@@ -25,7 +37,37 @@ export function createImuModel({ gyroBiasStd = 0.001, accBiasStd = 0.02, gyroNoi
     accBody[1] += accBias[1] + randomNormal() * accNoiseStd;
     accBody[2] += accBias[2] + randomNormal() * accNoiseStd;
 
-    return { gyro, acc: accBody };
+    const magBody = [0, 0, 0];
+    rotateVectorByMatrix(magBody, rotT, earthMagField);
+    magBody[0] += magBias[0] + randomNormal() * magNoiseStd;
+    magBody[1] += magBias[1] + randomNormal() * magNoiseStd;
+    magBody[2] += magBias[2] + randomNormal() * magNoiseStd;
+
+    const altitudeTrue = Math.max(0, Math.min(state.position[2], fieldHeight));
+    const altitudeMeasured = Math.max(0, altitudeTrue + randomNormal() * altNoiseStd);
+
+    const bodyDown = [0, 0, 0];
+    rotateVectorByMatrix(bodyDown, rot, [0, 0, -1]);
+    const downCos = Math.max(0, -bodyDown[2]);
+    let tof = null;
+    if (downCos > 1e-3) {
+      const range = Math.max(0, altitudeTrue / downCos + randomNormal() * tofNoiseStd);
+      tof = Math.min(range, fieldHeight * 1.2);
+    }
+
+    return {
+      gyro,
+      acc: accBody,
+      mag: magBody,
+      alt: altitudeMeasured,
+      absAltitude: altitudeTrue,
+      tof,
+      altitude: {
+        estimated: altitudeMeasured,
+        true: altitudeTrue,
+        fieldHeight
+      }
+    };
   }
 
   function randomNormal() {

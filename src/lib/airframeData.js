@@ -1,6 +1,7 @@
 import airframeSpec from '../../tmp.json';
 
 const rho = airframeSpec.environment_model.rho0_kg_per_m3;
+const fieldHeight = 50;
 const ct0 = airframeSpec.propulsion_model.aero_coeffs_assumed.C_T0;
 const cq0 = airframeSpec.propulsion_model.aero_coeffs_assumed.C_Q0;
 const diameter = airframeSpec.components.propellers.diameter_m;
@@ -29,7 +30,8 @@ export const airframe = {
   spec: airframeSpec,
   env: {
     gravity: airframeSpec.environment_model.gravity_mps2,
-    airDensity: rho
+    airDensity: rho,
+    fieldHeight
   },
   geometry: {
     wheelbase,

@@ -7,7 +7,7 @@ JeNo 3 フレーム（`tmp.json` に含まれる機体データ）をもとに�
 - **UI / 可視化**: Vite + Vanilla JavaScript + Babylon.js
 - **シミュレーション**: Web Worker 内で剛体力学、プロペラ推力モデル、相補フィルタ、PID 制御を実装
 - **機体データ**: `tmp.json` から質量・慣性・推力係数を読込
-- **Skulpt 連携**: `command()`・`sleep()`・`hold()`・`prop_*.power()`・`updateRot()` などの API を提供し、Python で離陸シナリオを記述
+- **Skulpt 連携**: `command()`・`sleep()`・`hold()`・`prop_*.power()`・`updateRot()` に加え、`getAbsAlt()`・`getToFAlt()`・`getIMUVal()`・`getMagVal()` などのセンサー API を提供し、Python で離陸シナリオを記述
 
 ## セットアップ
 
@@ -55,11 +55,12 @@ npm run preview
 - **セットポイント & PID**: Roll / Pitch / Yaw を度単位で、Throttle を 0〜100 % で指示。PID ゲインは各軸ごとにスライダで調整し、即座に Web Worker へ送信されます。
 - **Skulpt 自動化**:
   - `hold(...)` / `sleep(seconds)` / `at(time_s, ...)` で `script_time` を進めつつコマンドを登録 (`None` で前回値維持)。
-  - `get_altitude()`、`get_actual_attitude()`、`get_estimated_attitude()` で最新テレメトリを参照。
+  - `getAbsAlt()` / `get_tof_alt()` / `getIMUVal()` / `getMagVal()` / `get_actual_attitude()` / `get_estimated_attitude()` で最新のセンサー推定を参照。
   - `prop_1.power(255)` など 0〜255 のアナログ指定でロータを駆動（prop_1〜prop_4 は第一象限から時計回りに対応）。
   - `updateRot(Prop1, 12000)` で特定ロータの RPM を上書きし、`None` で解除。
   - 実行ログとエラーはコンソールに逐次表示され、セッションリセット時には自動で再適用されます。
-- **テレメトリチャート**: 高度（STL 接地オフセット込み）と姿勢スコア（姿勢誤差の RMS を 0〜100 点に換算）を 30 s ウィンドウでプロット。
+- **Altitude スコア**: フィールド上限 50 m、狙いの高度コリドー 23〜26 m に滞在した累積時間を得点化し、メトリクスとチャートで可視化。
+- **テレメトリチャート**: 高度（STL 接地オフセット込み）、高度スコア、姿勢スコア（姿勢誤差の RMS を 0〜100 点に換算）を 30 s ウィンドウでプロット。
 
 ## データフロー概要
 

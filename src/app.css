@@ -231,6 +231,14 @@ textarea {
   letter-spacing: 0.03em;
 }
 
+.metric-card .metric-subtext {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: rgba(148, 163, 184, 0.85);
+}
+
 .chart-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

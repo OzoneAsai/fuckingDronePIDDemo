@@ -12,7 +12,8 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
   let state = createQuadState();
   let estimator = new ComplementaryFilter(filterAlpha);
   estimator.reset(state.quaternion);
-  let imu = createImuModel();
+  const fieldHeight = airframe.env.fieldHeight ?? 50;
+  let imu = createImuModel({ fieldHeight });
 
   const rotorCount = airframe.propulsion.rotorCount;
 
@@ -52,14 +53,18 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
     absolute: 0
   };
 
+  const altitudeBand = { min: 23, max: 26 };
+  let altitudeBandTime = 0;
+
   function resetState() {
     console.log('[Simulator] resetState invoked');
     state = createQuadState();
     estimator = new ComplementaryFilter(filterAlpha);
     estimator.reset(state.quaternion);
-    imu = createImuModel();
+    imu = createImuModel({ fieldHeight });
     rotorRpmCommands = new Array(rotorCount).fill(0);
     Object.values(pid).forEach((controller) => controller.reset());
+    altitudeBandTime = 0;
   }
 
   function resetWorld() {
@@ -142,6 +147,12 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
 
     const result = stepQuad(state, rotorRpmCommands, dt);
 
+    const trueAltitude = measurement.absAltitude ?? Math.max(0, Math.min(state.position[2], fieldHeight));
+    if (trueAltitude >= altitudeBand.min && trueAltitude <= altitudeBand.max) {
+      altitudeBandTime += dt;
+    }
+    const altitudeScore = Math.min(100, (altitudeBandTime / Math.max(1e-6, timeline.duration)) * 100);
+
     timeline.time += dt;
     timeline.absolute += dt;
     let sessionReset = false;
@@ -163,7 +174,18 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
       errors,
       timeline: { ...timeline },
       sessionReset,
-      result
+      result,
+      scores: {
+        altitude: {
+          score: altitudeScore,
+          timeInBand: altitudeBandTime,
+          band: { ...altitudeBand },
+          fieldHeight,
+          latestTrueAltitude: trueAltitude,
+          latestSensorAltitude: measurement.alt ?? trueAltitude,
+          tof: measurement.tof ?? null
+        }
+      }
     };
   }
 
@@ -207,6 +229,14 @@ export function createSimulator({ dt = 0.005, pidGains, filterAlpha = 0.05, sess
         hoverRpm: propulsionLimits.hoverRpm,
         maxRpm: propulsionLimits.maxRpm,
         maxCollective
+      },
+      scores: {
+        altitude: {
+          score: Math.min(100, (altitudeBandTime / Math.max(1e-6, timeline.duration)) * 100),
+          timeInBand: altitudeBandTime,
+          band: { ...altitudeBand },
+          fieldHeight
+        }
       }
     };
   }

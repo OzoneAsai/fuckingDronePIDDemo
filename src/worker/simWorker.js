@@ -40,7 +40,8 @@ function startLoop() {
         },
         errors: lastStep?.errors,
         sessionReset: lastStep?.sessionReset,
-        timeline: lastStep?.timeline
+        timeline: lastStep?.timeline,
+        scores: lastStep?.scores
       });
     }
   }, intervalMs);
@@ -89,7 +90,13 @@ self.onmessage = (event) => {
     }
     case 'snapshot': {
       if (!simulator) break;
-      postMessage({ type: 'state', snapshot: simulator.getSnapshot(), estimation: lastStep?.estimation, measurement: lastStep?.measurement });
+      postMessage({
+        type: 'state',
+        snapshot: simulator.getSnapshot(),
+        estimation: lastStep?.estimation,
+        measurement: lastStep?.measurement,
+        scores: lastStep?.scores
+      });
       break;
     }
     case 'pause': {
