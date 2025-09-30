@@ -1,0 +1,12 @@
+import { defineConfig } from 'vite';
+import { ensureFrameModel } from './scripts/ensureFrameModel.js';
+
+export default defineConfig(async () => {
+  await ensureFrameModel({ silent: true });
+
+  return {
+    worker: {
+      format: 'es'
+    }
+  };
+});

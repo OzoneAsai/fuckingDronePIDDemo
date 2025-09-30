@@ -1,0 +1,21 @@
+{
+  "name": "drone-pid-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node scripts/check.js"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^7.42.0",
+    "@babylonjs/loaders": "^7.42.0",
+    "skulpt": "^1.2.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.7"
+  }
+}
